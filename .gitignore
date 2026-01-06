@@ -1,0 +1,61 @@
+# === 环境与密钥 ===
+.env
+.env.local
+.env.*.local
+
+# === 临时目录 (通过环境变量配置路径) ===
+models/
+data/
+logs/
+
+# === Python ===
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# === Virtual Environments ===
+.venv/
+venv/
+ENV/
+
+# === UV ===
+.uv/
+.uv-bootstrap/
+
+# === IDE ===
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# === Testing ===
+.coverage
+.pytest_cache/
+htmlcov/
+.tox/
+.nox/
+.mypy_cache/
+.ruff_cache/
+
+# === Misc ===
+*.log
+.DS_Store
+Thumbs.db

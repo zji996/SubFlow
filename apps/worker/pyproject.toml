@@ -1,0 +1,20 @@
+[project]
+name = "subflow-worker"
+version = "0.1.0"
+description = "SubFlow background worker"
+requires-python = ">=3.11"
+dependencies = [
+    "redis>=5.0",
+    "psycopg[binary]>=3.2",
+    "boto3>=1.35",
+    "subflow",
+]
+
+[dependency-groups]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.24"]
+
+[tool.uv.sources]
+subflow = { path = "../../libs/subflow", editable = true }
+
+[tool.ruff]
+line-length = 100
