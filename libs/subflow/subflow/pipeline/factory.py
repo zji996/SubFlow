@@ -9,23 +9,19 @@ from subflow.stages import (
     AudioPreprocessStage,
     ExportStage,
     GlobalUnderstandingPass,
-    QAPass,
     SemanticChunkingPass,
-    TranslationPass,
     VADStage,
 )
 
 
 def create_translation_pipeline(config: Settings) -> PipelineExecutor:
-    """创建标准翻译流水线"""
+    """创建标准翻译流水线 (2 Pass LLM 处理)"""
     stages = [
         AudioPreprocessStage(config),
         VADStage(config),
         ASRStage(config),
         GlobalUnderstandingPass(config),
         SemanticChunkingPass(config),
-        TranslationPass(config),
-        QAPass(config),
         ExportStage(config, format="srt"),
     ]
     return PipelineExecutor(stages)

@@ -83,6 +83,8 @@ class GLMASRProvider(ASRProvider):
                 "model": self.model,
                 "response_format": "text",
             }
+            if language:
+                data["language"] = language
 
             response = await client.post(
                 f"{self.base_url}/audio/transcriptions",
@@ -118,11 +120,13 @@ class GLMASRProvider(ASRProvider):
     async def transcribe_batch(
         self,
         audio_paths: list[str],
+        language: str | None = None,
     ) -> list[str]:
         """Transcribe multiple audio files concurrently.
 
         Args:
             audio_paths: List of paths to audio files
+            language: Optional language hint passed to the API
 
         Returns:
             List of transcribed texts in the same order
@@ -132,7 +136,7 @@ class GLMASRProvider(ASRProvider):
         async def _transcribe_one(path: str) -> str:
             async with semaphore:
                 try:
-                    result = await self.transcribe(path)
+                    result = await self.transcribe(path, language=language)
                     return result[0].text if result else ""
                 except Exception as e:
                     # Log error but return empty string to maintain order

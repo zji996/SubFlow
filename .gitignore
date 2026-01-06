@@ -68,3 +68,6 @@ htmlcov/
 *.log
 .DS_Store
 Thumbs.db
+
+assets/test_video
+assets/tests

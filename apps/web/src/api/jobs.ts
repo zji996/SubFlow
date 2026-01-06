@@ -8,6 +8,7 @@ export interface Job {
 
 export interface CreateJobRequest {
     video_url: string
+    source_language?: string
     target_language: string
 }
 

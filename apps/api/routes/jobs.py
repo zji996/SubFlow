@@ -15,6 +15,7 @@ router = APIRouter(prefix="/jobs", tags=["jobs"])
 
 class CreateJobRequest(BaseModel):
     video_url: str
+    source_language: str | None = None
     target_language: str = "zh"
 
 
@@ -33,7 +34,11 @@ def _job_service(request: Request) -> JobService:
 @router.post("", response_model=JobResponse)
 async def create_job(request: Request, payload: CreateJobRequest) -> JobResponse:
     service = _job_service(request)
-    job = await service.create_job(video_url=payload.video_url, target_language=payload.target_language)
+    job = await service.create_job(
+        video_url=payload.video_url,
+        source_language=payload.source_language,
+        target_language=payload.target_language,
+    )
     return JobResponse(id=job["id"], status=job["status"], result_url=job.get("result_url"))
 
 

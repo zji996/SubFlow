@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from subflow.formatters.base import SubtitleFormatter
-from subflow.models.segment import SemanticChunk
+from subflow.models.segment import ASRSegment, SemanticChunk
 
 
 def _format_vtt_timestamp(seconds: float) -> str:
@@ -20,11 +20,20 @@ def _format_vtt_timestamp(seconds: float) -> str:
 
 
 class VTTFormatter(SubtitleFormatter):
-    def format(self, chunks: list[SemanticChunk]) -> str:
+    def format(self, chunks: list[SemanticChunk], asr_segments: dict[int, ASRSegment]) -> str:
         lines: list[str] = ["WEBVTT", ""]
         for chunk in chunks:
             text = (chunk.translation or chunk.text).strip()
-            lines.append(f"{_format_vtt_timestamp(chunk.start)} --> {_format_vtt_timestamp(chunk.end)}")
+            start = 0.0
+            end = 0.0
+            if chunk.asr_segment_ids:
+                first_id = chunk.asr_segment_ids[0]
+                last_id = chunk.asr_segment_ids[-1]
+                if first_id in asr_segments:
+                    start = float(asr_segments[first_id].start)
+                if last_id in asr_segments:
+                    end = float(asr_segments[last_id].end)
+            lines.append(f"{_format_vtt_timestamp(start)} --> {_format_vtt_timestamp(end)}")
             lines.append(text)
             lines.append("")
         return "\n".join(lines).rstrip() + "\n"

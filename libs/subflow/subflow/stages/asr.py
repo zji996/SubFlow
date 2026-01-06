@@ -47,6 +47,7 @@ class ASRStage(Stage):
         context = dict(context)
         vocals_path: str = context["vocals_audio_path"]
         vad_segments: list[VADSegment] = context["vad_segments"]
+        source_language = context.get("source_language") or None
 
         if not vad_segments:
             context["asr_segments"] = []
@@ -68,7 +69,7 @@ class ASRStage(Stage):
             )
 
             # 2. Transcribe all segments concurrently
-            texts = await self.provider.transcribe_batch(segment_paths)
+            texts = await self.provider.transcribe_batch(segment_paths, language=source_language)
 
             # 3. Assemble results with timing
             asr_segments: list[ASRSegment] = []
@@ -79,7 +80,7 @@ class ASRStage(Stage):
                         start=vad_seg.start,
                         end=vad_seg.end,
                         text=text.strip(),
-                        language=context.get("source_language"),
+                        language=source_language,
                     )
                 )
 
@@ -88,7 +89,7 @@ class ASRStage(Stage):
 
             context["asr_segments"] = asr_segments
             context["full_transcript"] = full_transcript
-            context.setdefault("source_language", "en")
+            context["source_language"] = source_language
 
         finally:
             # 5. Cleanup temporary segment files

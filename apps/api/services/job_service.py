@@ -19,13 +19,19 @@ class JobService:
     def _job_key(job_id: str) -> str:
         return f"subflow:job:{job_id}"
 
-    async def create_job(self, video_url: str, target_language: str = "zh") -> dict:
+    async def create_job(
+        self,
+        video_url: str,
+        source_language: str | None = None,
+        target_language: str = "zh",
+    ) -> dict:
         job_id = uuid4().hex
         now = datetime.now(tz=timezone.utc).isoformat()
         job = {
             "id": job_id,
             "video_url": video_url,
             "status": JobStatus.PENDING.value,
+            "source_language": source_language,
             "target_language": target_language,
             "created_at": now,
             "updated_at": now,

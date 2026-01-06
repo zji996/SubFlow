@@ -169,72 +169,14 @@ SubFlow 是一个基于语义理解的视频字幕翻译系统。与传统的逐
 
 ### Stage 4: LLM 多 Pass 处理 (Multi-Pass LLM Processing)
 
-**目标**：通过多轮 LLM 处理，完成语义理解、切分、翻译和审校。
+**目标**：通过 2 轮 LLM 处理，完成全局理解、语义块切分、纠错与翻译。
 
-```
-                        ┌───────────────┐
-                        │ ASR Results + │
-                        │ Full Transcr. │
-                        └───────┬───────┘
-                                │
-        ┌───────────────────────┼───────────────────────┐
-        ▼                       ▼                       ▼
-   ┌─────────┐            ┌─────────┐            ┌─────────┐
-   │ Pass 1  │───────────▶│ Pass 2  │───────────▶│ Pass 3  │
-   │全局理解  │  (术语表)   │语义切分  │  (语义块)   │翻译生成  │
-   └─────────┘            └─────────┘            └─────────┘
-        │                                             │
-        │           ┌─────────┐                       │
-        └──────────▶│ Pass 4  │◀──────────────────────┘
-            (术语表) │质量审校  │ (翻译结果)
-                    └─────────┘
-```
+- Pass 1（全局理解）：生成 `global_context`（主题/领域/风格/术语表/翻译注意事项）
+- Pass 2（语义切分+纠错+翻译）：从 `asr_segments` 生成 `asr_corrected_segments` 与 `semantic_chunks`（包含 `translation`），并将纠错结果回写到 `asr_segments`
 
-#### Pass 1: 全局理解 (Global Understanding)
+Stage 4 的详细提示词、输入/输出 JSON、以及给 LLM 的实际输入（System Prompt + User Input）已拆到：`docs/llm_multi_pass.md`。
 
-**目标**：建立全局认知，提取关键信息指导后续翻译。
-
-**输出**：
-- 视频主题与领域
-- 语言风格分析
-- 说话人信息
-- **术语表** (核心产出)
-- 内容大纲
-- 翻译注意事项
-
-#### Pass 2: 语义块切分 (Semantic Chunking)
-
-**目标**：将 ASR 段落重组为语义完整的翻译单元。
-
-**核心理念**：
-> 不同语言语序不同，但"表达意思的块"是一致的。语义块 = 可独立翻译、在目标语言中也构成完整意义的最小单元。
-
-**切分原则**：
-1. 语义完整性：每块表达一个完整的意思
-2. 翻译友好：切分点便于目标语言自然表达
-3. 长度适中：翻译后适合字幕显示（~20字符）
-4. 时间对齐：保留与原始 segment 的映射关系
-
-#### Pass 3: 上下文翻译 (Context-Aware Translation)
-
-**目标**：在全局上下文和术语表约束下，生成高质量翻译。
-
-**策略**：
-- 滑动窗口：包含当前块的前后文
-- 术语一致性：强制使用 Pass 1 的术语表
-- 风格保持：遵循全局理解的语气指导
-
-#### Pass 4: 质量审校 (Quality Assurance)
-
-**目标**：审查翻译质量，修正问题，确保最终输出。
-
-**检查项**：
-- 术语一致性
-- 漏译/错译检测
-- 译文流畅度
-- 时间轴合理性
-
-**输入 Artifact**: `asr_results.json` + `full_transcript.txt`
+**输入 Artifact**: `asr_results.json` + `full_transcript.txt`  
 **输出 Artifact**: `translation_result.json` (语义块 + 翻译 + 时间戳)
 
 ---
@@ -291,9 +233,8 @@ Artifact
 | `ASR_RESULTS` | 带时间戳的识别文本 | Stage 3 |
 | `FULL_TRANSCRIPT` | 完整转录文本 | Stage 3 |
 | `GLOBAL_CONTEXT` | 全局理解结果 | Stage 4.1 |
-| `SEMANTIC_CHUNKS` | 语义块切分结果 | Stage 4.2 |
-| `TRANSLATION` | 翻译结果 | Stage 4.3 |
-| `REVIEWED_TRANSLATION` | 审校后翻译 | Stage 4.4 |
+| `ASR_CORRECTED_SEGMENTS` | ASR 纠错/语气词标记结果 | Stage 4.2 |
+| `SEMANTIC_CHUNKS` | 语义块切分结果（包含翻译） | Stage 4.2 |
 | `SUBTITLE_FILE` | 最终字幕文件 | Stage 5 |
 
 ---

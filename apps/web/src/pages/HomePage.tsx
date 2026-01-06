@@ -16,6 +16,7 @@ const languages = [
 export default function HomePage() {
     const navigate = useNavigate()
     const [videoUrl, setVideoUrl] = useState('')
+    const [sourceLanguage, setSourceLanguage] = useState('')
     const [targetLanguage, setTargetLanguage] = useState('zh')
     const [loading, setLoading] = useState(false)
     const [error, setError] = useState<string | null>(null)
@@ -33,6 +34,7 @@ export default function HomePage() {
         try {
             const job = await createJob({
                 video_url: videoUrl.trim(),
+                source_language: sourceLanguage || undefined,
                 target_language: targetLanguage,
             })
             navigate(`/jobs/${job.id}`)
@@ -121,6 +123,29 @@ export default function HomePage() {
                                 </option>
                             ))}
                         </select>
+                    </div>
+
+                    <div>
+                        <label htmlFor="sourceLanguage" className="block text-sm font-medium mb-2">
+                            源语言（可选）
+                        </label>
+                        <select
+                            id="sourceLanguage"
+                            className="input"
+                            value={sourceLanguage}
+                            onChange={(e) => setSourceLanguage(e.target.value)}
+                            disabled={loading}
+                        >
+                            <option value="">自动识别</option>
+                            {languages.map((lang) => (
+                                <option key={lang.code} value={lang.code}>
+                                    {lang.name}
+                                </option>
+                            ))}
+                        </select>
+                        <p className="text-xs text-[--color-text-muted] mt-2">
+                            指定后会作为 ASR 语言提示（例如 `en`、`zh`），不指定则交由模型自动判断
+                        </p>
                     </div>
 
                     <button

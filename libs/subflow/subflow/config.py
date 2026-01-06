@@ -1,10 +1,12 @@
 """Configuration management using pydantic-settings."""
 
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class ASRConfig(BaseSettings):
     """ASR Provider configuration."""
+
+    model_config = SettingsConfigDict(env_prefix="ASR_")
 
     provider: str = "glm_asr"
     base_url: str = "http://localhost:8000/v1"
@@ -13,41 +15,35 @@ class ASRConfig(BaseSettings):
     max_concurrent: int = 20  # 并发请求数
     timeout: float = 300.0  # 单个请求超时（秒）
 
-    class Config:
-        env_prefix = "ASR_"
-
 
 class LLMConfig(BaseSettings):
     """LLM Provider configuration."""
+
+    model_config = SettingsConfigDict(env_prefix="LLM_")
 
     provider: str = "openai"
     base_url: str = "https://api.openai.com/v1"
     api_key: str = ""
     model: str = "gpt-4"
 
-    class Config:
-        env_prefix = "LLM_"
-
 
 class AudioConfig(BaseSettings):
     """Audio processing configuration."""
+
+    model_config = SettingsConfigDict(env_prefix="AUDIO_")
 
     ffmpeg_bin: str = "ffmpeg"
     demucs_bin: str = "demucs"
     demucs_model: str = "htdemucs_ft"
 
-    class Config:
-        env_prefix = "AUDIO_"
-
 
 class VADConfig(BaseSettings):
     """VAD configuration."""
 
+    model_config = SettingsConfigDict(env_prefix="VAD_")
+
     min_silence_duration_ms: int = 300
     min_speech_duration_ms: int = 250
-
-    class Config:
-        env_prefix = "VAD_"
 
 
 class Settings(BaseSettings):

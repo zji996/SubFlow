@@ -12,7 +12,8 @@ curl http://localhost:8000/v1/audio/transcriptions \
   -H "Authorization: Bearer abc123" \
   -F "model=glm-asr" \
   -F "file=@audio.wav" \
-  -F "response_format=text"
+  -F "response_format=text" \
+  -F "language=zh" # 可选：源语言提示（不传则自动识别）
 ```
 
 ### 响应格式
