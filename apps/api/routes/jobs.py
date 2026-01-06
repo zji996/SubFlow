@@ -7,7 +7,7 @@ from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 from redis.asyncio import Redis
 
-from libs.subflow.models.job import JobStatus
+from subflow.models.job import JobStatus
 from services.job_service import JobService
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
@@ -63,4 +63,3 @@ async def get_job_result(request: Request, job_id: str) -> RedirectResponse:
     if not result_url:
         raise HTTPException(status_code=404, detail="result not available")
     return RedirectResponse(url=result_url, status_code=307)
-

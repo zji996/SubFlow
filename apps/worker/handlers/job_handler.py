@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 
 from redis.asyncio import Redis
 
-from libs.subflow.config import Settings
-from libs.subflow.models.job import JobStatus
-from libs.subflow.pipeline import PipelineExecutor
+from subflow.config import Settings
+from subflow.models.job import JobStatus
+from subflow.pipeline import PipelineExecutor
+from subflow.services import StorageService
 
 
 def _job_key(job_id: str) -> str:
@@ -55,11 +57,24 @@ async def process_job(job_data: dict, pipeline: PipelineExecutor, redis: Redis, 
             }
         )
 
+        subtitle_text = str(final_context.get("subtitle_text", ""))
         result_path = str(final_context.get("result_path", f"jobs/{job_id}/subtitles.srt"))
-        result_url = (
-            f"{settings.s3_endpoint.rstrip('/')}/{settings.s3_bucket_name}/{result_path.lstrip('/')}"
+
+        local_out_dir = Path(settings.data_dir) / "jobs" / job_id
+        local_out_dir.mkdir(parents=True, exist_ok=True)
+        local_sub_path = local_out_dir / Path(result_path).name
+        local_sub_path.write_text(subtitle_text, encoding="utf-8")
+
+        storage = StorageService(
+            endpoint=settings.s3_endpoint,
+            access_key=settings.s3_access_key,
+            secret_key=settings.s3_secret_key,
+            bucket=settings.s3_bucket_name,
         )
-        await redis.set(f"subflow:job_result:{job_id}", final_context.get("subtitle_text", ""), ex=7 * 24 * 3600)
+        await storage.upload_file(str(local_sub_path), result_path)
+        result_url = await storage.get_presigned_url(result_path, expires_in=24 * 3600)
+
+        await redis.set(f"subflow:job_result:{job_id}", subtitle_text, ex=7 * 24 * 3600)
         await _update_job(
             redis,
             job_id,
@@ -74,4 +89,3 @@ async def process_job(job_data: dict, pipeline: PipelineExecutor, redis: Redis, 
             job_id,
             {"status": JobStatus.FAILED.value, "error": str(exc)},
         )
-

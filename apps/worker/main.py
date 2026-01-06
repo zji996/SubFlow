@@ -5,8 +5,8 @@ import json
 
 from redis.asyncio import Redis
 
-from libs.subflow.config import Settings
-from libs.subflow.pipeline import PipelineExecutor, create_translation_pipeline
+from subflow.config import Settings
+from subflow.pipeline import PipelineExecutor, create_translation_pipeline
 from handlers.job_handler import process_job
 
 

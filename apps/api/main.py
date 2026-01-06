@@ -3,7 +3,7 @@
 from fastapi import FastAPI
 from redis.asyncio import Redis
 
-from libs.subflow.config import Settings
+from subflow.config import Settings
 from routes.jobs import router as jobs_router
 
 app = FastAPI(

@@ -60,7 +60,7 @@ subflow = { path = "../../libs/subflow", editable = true }
 
 ```python
 # 导入路径
-from libs.subflow.providers import get_asr_provider
+from subflow.providers import get_asr_provider
 ```
 
 ## Provider 模式

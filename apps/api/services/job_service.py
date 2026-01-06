@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from redis.asyncio import Redis
 
-from libs.subflow.models.job import JobStatus
+from subflow.models.job import JobStatus
 
 
 class JobService:
@@ -51,4 +51,3 @@ class JobService:
         job["updated_at"] = datetime.now(tz=timezone.utc).isoformat()
         await self.redis.set(self._job_key(job_id), json.dumps(job), ex=7 * 24 * 3600)
         return job
-
