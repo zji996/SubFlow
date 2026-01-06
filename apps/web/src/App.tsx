@@ -1,16 +1,17 @@
-import { Routes, Route } from 'react-router-dom'
+import { Routes, Route, Navigate } from 'react-router-dom'
 import Layout from './components/Layout'
-import HomePage from './pages/HomePage'
-import JobsPage from './pages/JobsPage'
-import JobDetailPage from './pages/JobDetailPage'
+import ProjectsPage from './pages/ProjectsPage'
+import NewProjectPage from './pages/NewProjectPage'
+import ProjectDetailPage from './pages/ProjectDetailPage'
 
 function App() {
     return (
         <Routes>
             <Route path="/" element={<Layout />}>
-                <Route index element={<HomePage />} />
-                <Route path="jobs" element={<JobsPage />} />
-                <Route path="jobs/:jobId" element={<JobDetailPage />} />
+                <Route index element={<Navigate to="/projects" replace />} />
+                <Route path="projects" element={<ProjectsPage />} />
+                <Route path="projects/new" element={<NewProjectPage />} />
+                <Route path="projects/:projectId" element={<ProjectDetailPage />} />
             </Route>
         </Routes>
     )

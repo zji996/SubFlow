@@ -5,10 +5,12 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+from subflow.utils.ffmpeg import resolve_ffmpeg_bin
+
 
 class FFmpegProvider:
     def __init__(self, ffmpeg_bin: str = "ffmpeg"):
-        self.ffmpeg_bin = ffmpeg_bin
+        self.ffmpeg_bin = resolve_ffmpeg_bin(ffmpeg_bin)
 
     async def _run(self, args: list[str]) -> None:
         try:
@@ -20,7 +22,8 @@ class FFmpegProvider:
         except FileNotFoundError as exc:
             raise RuntimeError(
                 f"ffmpeg binary not found: {self.ffmpeg_bin}. "
-                "Install ffmpeg and ensure it is in PATH (or set AUDIO_FFMPEG_BIN)."
+                "Install ffmpeg and ensure it is in PATH (or install `imageio-ffmpeg` in the env, "
+                "or set AUDIO_FFMPEG_BIN)."
             ) from exc
         stdout, stderr = await process.communicate()
         if process.returncode != 0:
@@ -32,11 +35,15 @@ class FFmpegProvider:
                 f"stderr: {stderr.decode(errors='ignore')}"
             )
 
-    async def extract_audio(self, video_path: str, output_path: str) -> str:
+    async def extract_audio(self, video_path: str, output_path: str, max_duration_s: float | None = None) -> str:
         """从视频提取音频，输出 16kHz 单声道 WAV"""
         video_path = str(video_path)
         output_path = str(output_path)
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+
+        extra: list[str] = []
+        if max_duration_s is not None and float(max_duration_s) > 0:
+            extra = ["-t", str(float(max_duration_s))]
 
         await self._run(
             [
@@ -45,6 +52,7 @@ class FFmpegProvider:
                 "-i",
                 video_path,
                 "-vn",
+                *extra,
                 "-ar",
                 "16000",
                 "-ac",

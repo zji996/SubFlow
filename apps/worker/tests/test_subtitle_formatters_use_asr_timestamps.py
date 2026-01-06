@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from subflow.formatters.srt import SRTFormatter
-from subflow.models.segment import ASRSegment, SemanticChunk
+from subflow.export import SubtitleExporter
+from subflow.models.segment import ASRCorrectedSegment, ASRSegment, SemanticChunk
+from subflow.models.subtitle_types import SubtitleExportConfig, SubtitleFormat
 
 
-def test_srt_formatter_uses_asr_segment_timestamps() -> None:
+def test_srt_export_uses_asr_segment_timestamps_and_dual_line() -> None:
     chunks = [
         SemanticChunk(
             id=0,
@@ -13,12 +14,48 @@ def test_srt_formatter_uses_asr_segment_timestamps() -> None:
             asr_segment_ids=[2, 3],
         )
     ]
-    asr_segments = {
-        2: ASRSegment(id=2, start=1.2, end=3.6, text="hello"),
-        3: ASRSegment(id=3, start=3.6, end=5.0, text="world"),
+    asr_segments = [
+        ASRSegment(id=2, start=1.2, end=3.6, text="hello"),
+        ASRSegment(id=3, start=3.6, end=5.0, text="world"),
+    ]
+    corrected = {
+        2: ASRCorrectedSegment(id=2, asr_segment_id=2, text="hello", corrections=[], is_filler=False),
+        3: ASRCorrectedSegment(id=3, asr_segment_id=3, text="world", corrections=[], is_filler=False),
     }
 
-    out = SRTFormatter().format(chunks, asr_segments)
+    out = SubtitleExporter().export(
+        chunks=chunks,
+        asr_segments=asr_segments,
+        asr_corrected_segments=corrected,
+        config=SubtitleExportConfig(format=SubtitleFormat.SRT, include_secondary=True, primary_position="top"),
+    )
     assert "00:00:01,200 --> 00:00:05,000" in out
     assert "你好" in out
+    assert "hello world" in out
 
+
+def test_srt_export_includes_filler_as_secondary_only() -> None:
+    chunks = [
+        SemanticChunk(id=0, text="hello world", translation="你好世界", asr_segment_ids=[2, 3]),
+    ]
+    asr_segments = [
+        ASRSegment(id=0, start=0.0, end=1.2, text="嗯"),
+        ASRSegment(id=1, start=1.2, end=2.0, text="那个"),
+        ASRSegment(id=2, start=2.0, end=3.6, text="hello"),
+        ASRSegment(id=3, start=3.6, end=5.0, text="world"),
+    ]
+    corrected = {
+        0: ASRCorrectedSegment(id=0, asr_segment_id=0, text="嗯", corrections=[], is_filler=True),
+        1: ASRCorrectedSegment(id=1, asr_segment_id=1, text="那个", corrections=[], is_filler=True),
+        2: ASRCorrectedSegment(id=2, asr_segment_id=2, text="hello", corrections=[], is_filler=False),
+        3: ASRCorrectedSegment(id=3, asr_segment_id=3, text="world", corrections=[], is_filler=False),
+    }
+
+    out = SubtitleExporter().export(
+        chunks=chunks,
+        asr_segments=asr_segments,
+        asr_corrected_segments=corrected,
+        config=SubtitleExportConfig(format=SubtitleFormat.SRT, include_secondary=True, primary_position="top"),
+    )
+    assert "00:00:00,000 --> 00:00:01,200\n嗯\n\n" in out
+    assert "00:00:01,200 --> 00:00:02,000\n那个\n\n" in out

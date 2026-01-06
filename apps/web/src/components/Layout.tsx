@@ -21,11 +21,11 @@ export default function Layout() {
                     </Link>
 
                     <nav className="flex items-center gap-6">
-                        <NavLink to="/" active={location.pathname === '/'}>
-                            首页
+                        <NavLink to="/projects" active={location.pathname.startsWith('/projects')}>
+                            Projects
                         </NavLink>
-                        <NavLink to="/jobs" active={location.pathname.startsWith('/jobs')}>
-                            任务列表
+                        <NavLink to="/projects/new" active={location.pathname === '/projects/new'}>
+                            New
                         </NavLink>
                     </nav>
                 </div>

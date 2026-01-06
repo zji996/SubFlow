@@ -27,13 +27,16 @@ SubFlow/
 source ~/.local/bin/env
 uv --version
 
+# Worker 依赖 demucs/torch/nemo，建议使用 Python 3.11（兼容性最好）
+uv python install 3.11
+
 # 依赖安装/同步（统一使用 uv，不使用 pip/poetry）
 uv sync --project libs/subflow
 uv sync --project apps/api
 uv sync --project apps/worker
 
 # 启动
-uv run --project apps/api --directory apps/api uvicorn main:app --reload
+uv run --project apps/api --directory apps/api uvicorn main:app --reload --port 8100
 uv run --project apps/worker --directory apps/worker python main.py
 
 # 测试
@@ -41,6 +44,9 @@ uv run --project apps/worker --directory apps/worker --group dev pytest
 
 # 脚本（必须借用 app 环境）
 uv run --project apps/worker scripts/xxx.py
+
+# 一键启动（本地开发）
+bash scripts/manager.sh up
 
 # 代码质量（如项目已配置 ruff）
 uv run --project apps/api --directory apps/api ruff check .

@@ -1,5 +1,6 @@
 """Provider factory and registry."""
 
+from subflow.exceptions import ConfigurationError
 from subflow.providers.asr.base import ASRProvider
 from subflow.providers.llm.base import LLMProvider
 
@@ -18,7 +19,7 @@ def get_asr_provider(config: dict) -> ASRProvider:
                 model=config.get("model", "glm-asr-nano-2512"),
             )
         case _:
-            raise ValueError(f"Unknown ASR provider: {provider_type}")
+            raise ConfigurationError(f"Unknown ASR provider: {provider_type}")
 
 
 def get_llm_provider(config: dict) -> LLMProvider:
@@ -35,4 +36,4 @@ def get_llm_provider(config: dict) -> LLMProvider:
                 model=config.get("model", "gpt-4"),
             )
         case _:
-            raise ValueError(f"Unknown LLM provider: {provider_type}")
+            raise ConfigurationError(f"Unknown LLM provider: {provider_type}")

@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any
+
+from subflow.pipeline.context import PipelineContext
 
 
 class Stage(ABC):
@@ -12,9 +13,9 @@ class Stage(ABC):
     name: str
 
     @abstractmethod
-    async def execute(self, context: dict[str, Any]) -> dict[str, Any]:
+    async def execute(self, context: PipelineContext) -> PipelineContext:
         """执行阶段逻辑，返回更新后的 context"""
 
     @abstractmethod
-    def validate_input(self, context: dict[str, Any]) -> bool:
+    def validate_input(self, context: PipelineContext) -> bool:
         """校验输入是否满足要求"""

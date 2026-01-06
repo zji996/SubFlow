@@ -1,51 +1,69 @@
-"""Export stage (mock implementation)."""
+"""Export stage (subtitle output)."""
 
 from __future__ import annotations
 
-from typing import Any
+import logging
 
 from subflow.config import Settings
-from subflow.models.segment import ASRSegment, SemanticChunk
+from subflow.exceptions import ConfigurationError
+from subflow.export.subtitle_exporter import SubtitleExporter
+from subflow.models.segment import ASRCorrectedSegment, ASRSegment, SemanticChunk
+from subflow.models.subtitle_types import SubtitleExportConfig, SubtitleFormat
+from subflow.pipeline.context import PipelineContext
 from subflow.stages.base import Stage
+
+logger = logging.getLogger(__name__)
 
 
 class ExportStage(Stage):
     name = "export"
 
-    def __init__(self, settings: Settings, format: str = "srt"):
+    def __init__(
+        self,
+        settings: Settings,
+        format: str = "srt",
+        include_secondary: bool = True,
+        primary_position: str = "top",
+    ):
         self.settings = settings
         self.format = format
+        self.include_secondary = include_secondary
+        self.primary_position = primary_position
 
-    def validate_input(self, context: dict[str, Any]) -> bool:
-        return bool(context.get("job_id")) and bool(context.get("semantic_chunks")) and bool(
-            context.get("asr_segments")
-        )
+    def validate_input(self, context: PipelineContext) -> bool:
+        run_id = context.get("project_id") or context.get("job_id")
+        return bool(run_id) and bool(context.get("asr_segments"))
 
-    async def execute(self, context: dict[str, Any]) -> dict[str, Any]:
+    async def execute(self, context: PipelineContext) -> PipelineContext:
         context = dict(context)
-        job_id = str(context["job_id"])
+        run_id = str(context.get("project_id") or context.get("job_id") or "")
+        if not run_id:
+            raise ConfigurationError("project_id is required")
         chunks: list[SemanticChunk] = list(context.get("semantic_chunks", []))
         asr_segments: list[ASRSegment] = list(context.get("asr_segments", []))
-        asr_segments_index: dict[int, ASRSegment] = {seg.id: seg for seg in asr_segments}
+        asr_corrected_segments: dict[int, ASRCorrectedSegment] | None = context.get(
+            "asr_corrected_segments"
+        )
 
-        formatter_name = self.format.lower()
-        match formatter_name:
-            case "srt":
-                from subflow.formatters.srt import SRTFormatter
+        fmt_raw = self.format.lower().strip()
+        try:
+            fmt = SubtitleFormat(fmt_raw)
+        except ValueError as exc:
+            raise ConfigurationError(f"Unknown subtitle format: {self.format}") from exc
 
-                formatter = SRTFormatter()
-            case "vtt":
-                from subflow.formatters.vtt import VTTFormatter
-
-                formatter = VTTFormatter()
-            case "ass":
-                from subflow.formatters.ass import ASSFormatter
-
-                formatter = ASSFormatter()
-            case _:
-                raise ValueError(f"Unknown subtitle format: {self.format}")
-
-        subtitle_text = formatter.format(chunks, asr_segments_index)
+        logger.info("export start (format=%s, project_id=%s)", fmt.value, run_id)
+        config = SubtitleExportConfig(
+            format=fmt,
+            include_secondary=self.include_secondary,
+            primary_position=self.primary_position,
+        )
+        subtitle_text = SubtitleExporter().export(
+            chunks=chunks,
+            asr_segments=asr_segments,
+            asr_corrected_segments=asr_corrected_segments,
+            config=config,
+        )
         context["subtitle_text"] = subtitle_text
-        context["result_path"] = f"jobs/{job_id}/subtitles.{formatter_name}"
+        context["result_path"] = f"projects/{run_id}/subtitles.{fmt.value}"
+        logger.info("export done (subtitle_chars=%d)", len(subtitle_text))
         return context

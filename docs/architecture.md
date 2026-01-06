@@ -183,7 +183,11 @@ Stage 4 的详细提示词、输入/输出 JSON、以及给 LLM 的实际输入�
 
 ### Stage 5: 字幕输出 (Subtitle Export)
 
-**目标**：将翻译结果导出为标准字幕格式。
+**目标**：将翻译结果导出为标准字幕格式（默认双行字幕）。
+
+- 第一行（主字幕）：`SemanticChunk.translation`
+- 第二行（子字幕）：按 `SemanticChunk.asr_segment_ids` 合并的 `ASRCorrectedSegment.text`
+- 语气词段落（`ASRCorrectedSegment.is_filler=True`）：不翻译，只输出一行原文
 
 ```
 ┌────────────┐     ┌────────────┐     ┌───────────────┐

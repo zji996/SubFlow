@@ -1,5 +1,5 @@
 """VAD Provider implementations."""
 
-from subflow.providers.vad.silero_vad import SileroVADProvider
+from subflow.providers.vad.nemo_marblenet import NemoMarbleNetVADProvider
 
-__all__ = ["SileroVADProvider"]
+__all__ = ["NemoMarbleNetVADProvider"]

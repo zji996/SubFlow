@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import tempfile
+import logging
 from pathlib import Path
-from typing import Any
 
 from subflow.config import Settings
 from subflow.models.segment import ASRSegment, VADSegment
+from subflow.pipeline.context import PipelineContext
 from subflow.providers.asr.glm_asr import GLMASRProvider
 from subflow.stages.base import Stage
 from subflow.utils.audio import cleanup_segment_files, cut_audio_segments_batch
+
+logger = logging.getLogger(__name__)
 
 
 class ASRStage(Stage):
@@ -28,11 +31,11 @@ class ASRStage(Stage):
             timeout=settings.asr.timeout,
         )
 
-    def validate_input(self, context: dict[str, Any]) -> bool:
+    def validate_input(self, context: PipelineContext) -> bool:
         """Check that vocals audio and VAD segments exist."""
         return bool(context.get("vocals_audio_path")) and bool(context.get("vad_segments"))
 
-    async def execute(self, context: dict[str, Any]) -> dict[str, Any]:
+    async def execute(self, context: PipelineContext) -> PipelineContext:
         """Execute ASR on all VAD segments concurrently.
 
         Input context keys:
@@ -50,15 +53,17 @@ class ASRStage(Stage):
         source_language = context.get("source_language") or None
 
         if not vad_segments:
+            logger.info("asr skipped (no vad_segments)")
             context["asr_segments"] = []
             context["full_transcript"] = ""
             return context
 
         # Create temp directory for audio segments
-        job_id = context.get("job_id", "unknown")
-        temp_dir = Path(tempfile.gettempdir()) / "subflow" / job_id / "asr_segments"
+        run_id = str(context.get("project_id") or context.get("job_id") or "unknown")
+        temp_dir = Path(tempfile.gettempdir()) / "subflow" / run_id / "asr_segments"
 
         try:
+            logger.info("asr start (segments=%d)", len(vad_segments))
             # 1. Cut audio into segments (concurrent ffmpeg)
             time_ranges = [(seg.start, seg.end) for seg in vad_segments]
             segment_paths = await cut_audio_segments_batch(
@@ -66,6 +71,7 @@ class ASRStage(Stage):
                 segments=time_ranges,
                 output_dir=str(temp_dir),
                 max_concurrent=10,  # FFmpeg 并发数
+                ffmpeg_bin=self.settings.audio.ffmpeg_bin,
             )
 
             # 2. Transcribe all segments concurrently
@@ -90,6 +96,7 @@ class ASRStage(Stage):
             context["asr_segments"] = asr_segments
             context["full_transcript"] = full_transcript
             context["source_language"] = source_language
+            logger.info("asr done (asr_segments=%d)", len(asr_segments))
 
         finally:
             # 5. Cleanup temporary segment files

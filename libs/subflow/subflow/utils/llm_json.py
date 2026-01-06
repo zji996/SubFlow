@@ -10,6 +10,10 @@ from typing import Any
 from subflow.providers.llm import LLMProvider, Message
 
 
+_THINK_BLOCK_RE = re.compile(r"^\s*<think>[\s\S]*?</think>\s*", re.IGNORECASE)
+_THINK_TAG_RE = re.compile(r"</?think>\s*", re.IGNORECASE)
+
+
 def parse_llm_json(text: str) -> dict | list:
     """Parse JSON from LLM output, supporting Markdown code blocks.
     
@@ -27,7 +31,10 @@ def parse_llm_json(text: str) -> dict | list:
     Raises:
         json.JSONDecodeError: If JSON parsing fails
     """
-    text = text.strip()
+    text = (text or "").strip()
+    # Some providers/models may include explicit reasoning blocks.
+    text = _THINK_BLOCK_RE.sub("", text).strip()
+    text = _THINK_TAG_RE.sub("", text).strip()
     
     # Try to extract Markdown code blocks
     patterns = [
@@ -41,8 +48,32 @@ def parse_llm_json(text: str) -> dict | list:
             text = match.group(1).strip()
             break
     
-    # Parse JSON
-    return json.loads(text)
+    # Parse JSON (best-effort extraction when extra text is present)
+    first_error: json.JSONDecodeError | None = None
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as exc:
+        first_error = exc
+
+    # Heuristic: extract the first JSON object/array payload from the text.
+    starts: list[tuple[int, str]] = []
+    for ch in ("{", "["):
+        idx = text.find(ch)
+        if idx != -1:
+            starts.append((idx, ch))
+    if not starts:
+        assert first_error is not None
+        raise first_error
+
+    start_idx, start_ch = min(starts, key=lambda x: x[0])
+    end_ch = "}" if start_ch == "{" else "]"
+    end_idx = text.rfind(end_ch)
+    if end_idx <= start_idx:
+        assert first_error is not None
+        raise first_error
+
+    candidate = text[start_idx : end_idx + 1].strip()
+    return json.loads(candidate)
 
 
 @dataclass

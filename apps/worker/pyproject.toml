@@ -8,6 +8,11 @@ dependencies = [
     "psycopg[binary]>=3.2",
     "boto3>=1.35",
     "subflow",
+    "demucs>=4.0.1",
+    "torch>=2.9.1",
+    "torchaudio>=2.9.1",
+    "torchcodec>=0.9.1",
+    "nemo-toolkit[asr]>=2.2.1",
 ]
 
 [dependency-groups]
@@ -18,3 +23,10 @@ subflow = { path = "../../libs/subflow", editable = true }
 
 [tool.ruff]
 line-length = 100
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+filterwarnings = [
+  "ignore:.*AbstractEventLoopPolicy.*:DeprecationWarning:pytest_asyncio\\..*",
+]

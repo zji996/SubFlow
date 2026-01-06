@@ -69,15 +69,14 @@ class ASRSegment:
 class ASRCorrectedSegment:
     id: int                        # 纠错段落编号
     asr_segment_id: int            # 关联的 ASRSegment.id
-    text: str                      # 纠错后的文本
-    corrections: list[Correction]  # 纠错详情列表
+    text: str                      # 纠错后的完整文本（由 LLM 直接输出）
     is_filler: bool = False        # 是否为纯语气词段落
-
-@dataclass
-class Correction:
-    original: str    # 原错误文本
-    corrected: str   # 修正后文本
+    is_hallucination: bool = False # 是否为 ASR 幻觉（不属于视频内容）
 ```
+
+> [!IMPORTANT]
+> **废弃替换式纠错**：不再使用 `corrections` 替换对，改为 LLM 直接输出纠错后的完整文本。
+> 原因：简单字符串替换会导致错误（如 "is" -> "it's" 会把 "this" 变成 "thit's"）。
 
 ### 3. SemanticChunk (语义块表)
 

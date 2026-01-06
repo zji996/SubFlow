@@ -8,12 +8,12 @@ export default defineConfig({
     server: {
         port: 3000,
         proxy: {
-            '/jobs': {
-                target: 'http://localhost:8000',
+            '/projects': {
+                target: 'http://localhost:8100',
                 changeOrigin: true,
             },
             '/health': {
-                target: 'http://localhost:8000',
+                target: 'http://localhost:8100',
                 changeOrigin: true,
             },
         },

@@ -6,6 +6,8 @@ import asyncio
 import os
 from pathlib import Path
 
+from subflow.utils.ffmpeg import resolve_ffmpeg_bin
+
 
 async def cut_audio_segment(
     input_path: str,
@@ -21,6 +23,7 @@ async def cut_audio_segment(
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
 
+    ffmpeg_bin = resolve_ffmpeg_bin(ffmpeg_bin)
     cmd = [
         ffmpeg_bin,
         "-y",
@@ -59,6 +62,7 @@ async def cut_audio_segments_batch(
     output_dir_path = Path(output_dir)
     output_dir_path.mkdir(parents=True, exist_ok=True)
 
+    ffmpeg_bin = resolve_ffmpeg_bin(ffmpeg_bin)
     semaphore = asyncio.Semaphore(max(1, int(max_concurrent)))
 
     async def _one(index: int, start: float, end: float) -> str:

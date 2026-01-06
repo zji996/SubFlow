@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
 
 import httpx
 
+from subflow.exceptions import ProviderError
 from subflow.providers.asr.base import ASRProvider, ASRSegment
+
+logger = logging.getLogger(__name__)
 
 
 class GLMASRProvider(ASRProvider):
@@ -86,14 +90,17 @@ class GLMASRProvider(ASRProvider):
             if language:
                 data["language"] = language
 
-            response = await client.post(
-                f"{self.base_url}/audio/transcriptions",
-                headers=headers,
-                files=files,
-                data=data,
-            )
-            response.raise_for_status()
-            result = response.json()
+            try:
+                response = await client.post(
+                    f"{self.base_url}/audio/transcriptions",
+                    headers=headers,
+                    files=files,
+                    data=data,
+                )
+                response.raise_for_status()
+                result = response.json()
+            except httpx.HTTPError as exc:
+                raise ProviderError("glm_asr", str(exc)) from exc
 
         text = result.get("text", "").strip()
         return [ASRSegment(text=text, start=0.0, end=0.0, language=language)]
@@ -139,8 +146,8 @@ class GLMASRProvider(ASRProvider):
                     result = await self.transcribe(path, language=language)
                     return result[0].text if result else ""
                 except Exception as e:
-                    # Log error but return empty string to maintain order
-                    print(f"ASR error for {path}: {e}")
+                    # Log error but return empty string to maintain order.
+                    logger.warning("asr error for %s: %s", path, e)
                     return ""
 
         results = await asyncio.gather(*[_transcribe_one(p) for p in audio_paths])

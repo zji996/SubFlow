@@ -50,3 +50,7 @@ class LLMProvider(ABC):
             Parsed JSON object.
         """
         ...
+
+    async def close(self) -> None:
+        """Close any underlying resources (optional)."""
+        return None

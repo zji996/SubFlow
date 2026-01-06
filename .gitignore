@@ -66,6 +66,7 @@ htmlcov/
 
 # === Misc ===
 *.log
+*.pid
 .DS_Store
 Thumbs.db
 
