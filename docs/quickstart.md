@@ -6,9 +6,9 @@
 
 - 已安装 `uv`
 - 已安装 Node.js（用于 `apps/web`）
-- 依赖服务（Redis / MinIO / Postgres 等）请自行用 Docker 启动（例如 `infra/docker-compose.dev.yml`）
+- 依赖服务（Redis / MinIO / Postgres 等）请自行用 Docker 启动（例如 `docker-compose -f docker-compose.dev.yml up -d`；也可使用 `infra/docker-compose.dev.yml`）
 - 如果你用 Docker 在 `./data/` 下跑了 Postgres/MinIO，`data/` 可能会被 root 占用；建议为 SubFlow 单独建一个可写目录并在 `.env` 里设置 `DATA_DIR=./data/subflow`
-- Worker 使用 `demucs/torch`（需要 GPU 的工作都在 worker），建议安装并使用 Python 3.13：`uv python install 3.13`
+- Worker 依赖 `demucs/torch/nemo`（需要 GPU 的工作都在 worker），建议使用 Python 3.11：`uv python install 3.11`
 
 ## 一键启动（推荐）
 

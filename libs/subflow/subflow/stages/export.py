@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import cast
 
 from subflow.config import Settings
 from subflow.exceptions import ConfigurationError
@@ -24,7 +25,7 @@ class ExportStage(Stage):
         format: str = "srt",
         include_secondary: bool = True,
         primary_position: str = "top",
-    ):
+    ) -> None:
         self.settings = settings
         self.format = format
         self.include_secondary = include_secondary
@@ -35,7 +36,7 @@ class ExportStage(Stage):
         return bool(run_id) and bool(context.get("asr_segments"))
 
     async def execute(self, context: PipelineContext) -> PipelineContext:
-        context = dict(context)
+        context = cast(PipelineContext, dict(context))
         run_id = str(context.get("project_id") or context.get("job_id") or "")
         if not run_id:
             raise ConfigurationError("project_id is required")

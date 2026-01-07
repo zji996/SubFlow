@@ -18,6 +18,7 @@ logger = logging.getLogger("subflow.api")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.redis = Redis.from_url(settings.redis_url, decode_responses=True)
+    app.state.settings = settings
     logger.info("API starting (redis=%s)", settings.redis_url)
     try:
         yield

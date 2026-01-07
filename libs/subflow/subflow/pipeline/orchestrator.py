@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, cast
 
 from subflow.config import Settings
 from subflow.exceptions import StageExecutionError
@@ -69,7 +69,7 @@ async def _maybe_close(obj: object) -> None:
 class PipelineOrchestrator:
     """Project-first orchestrator with artifact persistence."""
 
-    def __init__(self, settings: Settings, store: ArtifactStore):
+    def __init__(self, settings: Settings, store: ArtifactStore) -> None:
         self.settings = settings
         self.store = store
 
@@ -88,7 +88,10 @@ class PipelineOrchestrator:
             try:
                 stage1 = await self.store.load_json(project.id, StageName.AUDIO_PREPROCESS.value, "stage1.json")
                 if isinstance(stage1, dict):
-                    ctx.update(stage1)
+                    for key in ("video_path", "audio_path", "vocals_audio_path"):
+                        value = stage1.get(key)
+                        if value is not None:
+                            ctx[key] = str(value)
             except FileNotFoundError:
                 pass
 
@@ -168,11 +171,11 @@ class PipelineOrchestrator:
             try:
                 logger.info("stage start (project_id=%s, stage=%s)", project.id, stage_name.value)
                 if stage_name == StageName.AUDIO_PREPROCESS:
-                    stage_impl = AudioPreprocessStage(self.settings)
+                    audio_stage = AudioPreprocessStage(self.settings)
                     try:
-                        ctx = await stage_impl.execute(ctx)
+                        ctx = await audio_stage.execute(ctx)
                     finally:
-                        await _maybe_close(stage_impl)
+                        await _maybe_close(audio_stage)
                     payload = {
                         "video_path": ctx.get("video_path"),
                         "audio_path": ctx.get("audio_path"),
@@ -182,11 +185,11 @@ class PipelineOrchestrator:
                     project.artifacts[stage_name.value] = {"stage1.json": ident}
 
                 elif stage_name == StageName.VAD:
-                    stage_impl = VADStage(self.settings)
+                    vad_stage = VADStage(self.settings)
                     try:
-                        ctx = await stage_impl.execute(ctx)
+                        ctx = await vad_stage.execute(ctx)
                     finally:
-                        await _maybe_close(stage_impl)
+                        await _maybe_close(vad_stage)
                     vad_segments: list[VADSegment] = list(ctx.get("vad_segments") or [])
                     ident = await self.store.save_json(
                         project.id,
@@ -207,11 +210,11 @@ class PipelineOrchestrator:
                     project.artifacts[stage_name.value] = artifacts
 
                 elif stage_name == StageName.ASR:
-                    stage_impl = ASRStage(self.settings)
+                    asr_stage = ASRStage(self.settings)
                     try:
-                        ctx = await stage_impl.execute(ctx)
+                        ctx = await asr_stage.execute(ctx)
                     finally:
-                        await _maybe_close(stage_impl)
+                        await _maybe_close(asr_stage)
                     asr_segments: list[ASRSegment] = list(ctx.get("asr_segments") or [])
                     asr_ident = await self.store.save_json(
                         project.id,
@@ -230,18 +233,25 @@ class PipelineOrchestrator:
                 elif stage_name == StageName.LLM:
                     max_asr = self.settings.llm.max_asr_segments
                     if isinstance(max_asr, int) and max_asr > 0:
-                        asr_segments: list[ASRSegment] = list(ctx.get("asr_segments") or [])
-                        if len(asr_segments) > max_asr:
-                            ctx = dict(ctx)
-                            ctx["asr_segments"] = asr_segments[:max_asr]
+                        asr_segments_for_llm: list[ASRSegment] = list(ctx.get("asr_segments") or [])
+                        if len(asr_segments_for_llm) > max_asr:
+                            ctx = cast(PipelineContext, dict(ctx))
+                            ctx["asr_segments"] = asr_segments_for_llm[:max_asr]
                             ctx["full_transcript"] = " ".join(
                                 seg.text for seg in ctx["asr_segments"] if (seg.text or "").strip()
                             )
                             corrected = dict(ctx.get("asr_corrected_segments") or {})
                             if corrected:
-                                ctx["asr_corrected_segments"] = {
-                                    k: v for k, v in corrected.items() if int(k) < max_asr
-                            }
+                                filtered: dict[int, ASRCorrectedSegment] = {}
+                                for k, v in corrected.items():
+                                    try:
+                                        key = int(k)
+                                    except (TypeError, ValueError):
+                                        continue
+                                    if key < max_asr and isinstance(v, ASRCorrectedSegment):
+                                        filtered[key] = v
+                                if filtered:
+                                    ctx["asr_corrected_segments"] = filtered
 
                     stage1 = GlobalUnderstandingPass(self.settings)
                     try:
@@ -282,11 +292,11 @@ class PipelineOrchestrator:
                     }
 
                 elif stage_name == StageName.EXPORT:
-                    stage_impl = ExportStage(self.settings, format="srt")
+                    export_stage = ExportStage(self.settings, format="srt")
                     try:
-                        ctx = await stage_impl.execute(ctx)
+                        ctx = await export_stage.execute(ctx)
                     finally:
-                        await _maybe_close(stage_impl)
+                        await _maybe_close(export_stage)
                     subtitle_text = str(ctx.get("subtitle_text") or "")
                     sub_ident = await self.store.save_text(
                         project.id, stage_name.value, "subtitles.srt", subtitle_text

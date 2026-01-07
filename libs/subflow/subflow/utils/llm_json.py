@@ -51,7 +51,10 @@ def parse_llm_json(text: str) -> dict | list:
     # Parse JSON (best-effort extraction when extra text is present)
     first_error: json.JSONDecodeError | None = None
     try:
-        return json.loads(text)
+        data = json.loads(text)
+        if isinstance(data, (dict, list)):
+            return data
+        raise json.JSONDecodeError("Expected a JSON object/array", text, 0)
     except json.JSONDecodeError as exc:
         first_error = exc
 
@@ -73,7 +76,10 @@ def parse_llm_json(text: str) -> dict | list:
         raise first_error
 
     candidate = text[start_idx : end_idx + 1].strip()
-    return json.loads(candidate)
+    data = json.loads(candidate)
+    if isinstance(data, (dict, list)):
+        return data
+    raise json.JSONDecodeError("Expected a JSON object/array", candidate, 0)
 
 
 @dataclass
@@ -91,7 +97,7 @@ class LLMJSONHelper:
     
     MAX_RETRIES = 3
     
-    def __init__(self, llm: LLMProvider, max_retries: int = 3):
+    def __init__(self, llm: LLMProvider, max_retries: int = 3) -> None:
         """Initialize helper.
         
         Args:

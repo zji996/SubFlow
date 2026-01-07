@@ -9,6 +9,7 @@ This model is shipped as a NeMo `.nemo` checkpoint, so inference requires `nemo_
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 
 class NemoMarbleNetVADProvider:
@@ -26,7 +27,7 @@ class NemoMarbleNetVADProvider:
         split_gap_s: float = 0.0,
         frame_hop_s: float = 0.02,
         device: str | None = None,
-    ):
+    ) -> None:
         self.model_path = str(model_path)
         self.threshold = float(threshold)
         self.min_silence_s = max(0.0, float(min_silence_duration_ms) / 1000.0)
@@ -47,7 +48,7 @@ class NemoMarbleNetVADProvider:
             return
         try:
             import torch
-            import nemo.collections.asr as nemo_asr  # type: ignore
+            import nemo.collections.asr as nemo_asr
         except Exception as exc:  # pragma: no cover
             raise RuntimeError(
                 "NeMo MarbleNet VAD requires `nemo_toolkit`. "
@@ -89,7 +90,7 @@ class NemoMarbleNetVADProvider:
         merged.append((cur_s, cur_e))
         return merged
 
-    def _postprocess(self, probs, duration_s: float) -> list[tuple[float, float]]:
+    def _postprocess(self, probs: Any, duration_s: float) -> list[tuple[float, float]]:
         # probs: 1D torch.Tensor or list[float]
         import torch
 

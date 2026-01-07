@@ -1,6 +1,6 @@
-import { useCallback } from 'react'
+import { useCallback, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { getProject, runAll, runStage, type Project, type StageName } from '../api/projects'
+import { getProject, getSubtitles, runAll, runStage, type Project, type StageName, type SubtitlePreview } from '../api/projects'
 import { Spinner } from '../components/Spinner'
 import { StatusBadge } from '../components/StatusBadge'
 import { usePolling } from '../hooks/usePolling'
@@ -20,6 +20,9 @@ function nextStage(currentStage: number): StageName | null {
 
 export default function ProjectDetailPage() {
     const { projectId } = useParams<{ projectId: string }>()
+    const [subtitlePreview, setSubtitlePreview] = useState<SubtitlePreview | null>(null)
+    const [subtitleLoading, setSubtitleLoading] = useState(false)
+    const [subtitleError, setSubtitleError] = useState<string | null>(null)
 
     const fetcher = useCallback(() => {
         if (!projectId) throw new Error('No project ID')
@@ -41,6 +44,20 @@ export default function ProjectDetailPage() {
     const handleRunAll = async () => {
         if (!projectId) return
         await runAll(projectId)
+    }
+
+    const handleLoadSubtitles = async () => {
+        if (!projectId) return
+        setSubtitleLoading(true)
+        setSubtitleError(null)
+        try {
+            const preview = await getSubtitles(projectId)
+            setSubtitlePreview(preview)
+        } catch (err) {
+            setSubtitleError(err instanceof Error ? err.message : 'Failed to load subtitles')
+        } finally {
+            setSubtitleLoading(false)
+        }
     }
 
     if (loading && !project) {
@@ -71,6 +88,7 @@ export default function ProjectDetailPage() {
     const exportArtifacts = (project.artifacts || {})['export'] || {}
     const downloadUrl: string | undefined = exportArtifacts['subtitles.srt_url']
     const localPath: string | undefined = exportArtifacts['subtitles.srt']
+    const hasExport = Boolean(downloadUrl || localPath)
 
     return (
         <div className="max-w-4xl mx-auto">
@@ -142,7 +160,7 @@ export default function ProjectDetailPage() {
                     })}
                 </div>
 
-                {(downloadUrl || localPath) && (
+                {hasExport && (
                     <div className="mt-10 p-4 rounded-lg border border-[--color-border] bg-[--color-bg]">
                         <div className="text-sm font-medium mb-2">Export</div>
                         {downloadUrl ? (
@@ -152,10 +170,30 @@ export default function ProjectDetailPage() {
                         ) : (
                             <div className="text-xs text-[--color-text-muted] font-mono">{localPath}</div>
                         )}
+
+                        <div className="mt-4 flex items-center gap-3">
+                            <button onClick={handleLoadSubtitles} className="btn-secondary" disabled={subtitleLoading}>
+                                {subtitleLoading ? '加载中…' : subtitlePreview ? '刷新预览' : '预览字幕'}
+                            </button>
+                            {subtitlePreview && (
+                                <div className="text-xs text-[--color-text-muted]">
+                                    source: <span className="font-mono">{subtitlePreview.source}</span>
+                                </div>
+                            )}
+                        </div>
+
+                        {subtitleError && (
+                            <div className="mt-3 text-sm text-red-400">{subtitleError}</div>
+                        )}
+
+                        {subtitlePreview && (
+                            <pre className="mt-4 max-h-[420px] overflow-auto rounded-lg border border-[--color-border] bg-black/30 p-4 text-xs leading-relaxed whitespace-pre-wrap">
+                                {subtitlePreview.content}
+                            </pre>
+                        )}
                     </div>
                 )}
             </div>
         </div>
     )
 }
-

@@ -9,7 +9,7 @@ from subflow.utils.ffmpeg import resolve_ffmpeg_bin
 
 
 class FFmpegProvider:
-    def __init__(self, ffmpeg_bin: str = "ffmpeg"):
+    def __init__(self, ffmpeg_bin: str = "ffmpeg") -> None:
         self.ffmpeg_bin = resolve_ffmpeg_bin(ffmpeg_bin)
 
     async def _run(self, args: list[str]) -> None:

@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 class DemucsProvider:
-    def __init__(self, model: str = "htdemucs_ft", demucs_bin: str = "demucs"):
+    def __init__(self, model: str = "htdemucs_ft", demucs_bin: str = "demucs") -> None:
         self.model = model
         self.demucs_bin = demucs_bin
 

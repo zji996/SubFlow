@@ -19,8 +19,8 @@ def test_srt_export_uses_asr_segment_timestamps_and_dual_line() -> None:
         ASRSegment(id=3, start=3.6, end=5.0, text="world"),
     ]
     corrected = {
-        2: ASRCorrectedSegment(id=2, asr_segment_id=2, text="hello", corrections=[], is_filler=False),
-        3: ASRCorrectedSegment(id=3, asr_segment_id=3, text="world", corrections=[], is_filler=False),
+        2: ASRCorrectedSegment(id=2, asr_segment_id=2, text="hello"),
+        3: ASRCorrectedSegment(id=3, asr_segment_id=3, text="world"),
     }
 
     out = SubtitleExporter().export(
@@ -29,9 +29,11 @@ def test_srt_export_uses_asr_segment_timestamps_and_dual_line() -> None:
         asr_corrected_segments=corrected,
         config=SubtitleExportConfig(format=SubtitleFormat.SRT, include_secondary=True, primary_position="top"),
     )
-    assert "00:00:01,200 --> 00:00:05,000" in out
+    assert "00:00:01,200 --> 00:00:03,600" in out
+    assert "00:00:03,600 --> 00:00:05,000" in out
     assert "你好" in out
-    assert "hello world" in out
+    assert "hello" in out
+    assert "world" in out
 
 
 def test_srt_export_includes_filler_as_secondary_only() -> None:
@@ -45,10 +47,10 @@ def test_srt_export_includes_filler_as_secondary_only() -> None:
         ASRSegment(id=3, start=3.6, end=5.0, text="world"),
     ]
     corrected = {
-        0: ASRCorrectedSegment(id=0, asr_segment_id=0, text="嗯", corrections=[], is_filler=True),
-        1: ASRCorrectedSegment(id=1, asr_segment_id=1, text="那个", corrections=[], is_filler=True),
-        2: ASRCorrectedSegment(id=2, asr_segment_id=2, text="hello", corrections=[], is_filler=False),
-        3: ASRCorrectedSegment(id=3, asr_segment_id=3, text="world", corrections=[], is_filler=False),
+        0: ASRCorrectedSegment(id=0, asr_segment_id=0, text="嗯"),
+        1: ASRCorrectedSegment(id=1, asr_segment_id=1, text="那个"),
+        2: ASRCorrectedSegment(id=2, asr_segment_id=2, text="hello"),
+        3: ASRCorrectedSegment(id=3, asr_segment_id=3, text="world"),
     }
 
     out = SubtitleExporter().export(
@@ -57,5 +59,9 @@ def test_srt_export_includes_filler_as_secondary_only() -> None:
         asr_corrected_segments=corrected,
         config=SubtitleExportConfig(format=SubtitleFormat.SRT, include_secondary=True, primary_position="top"),
     )
-    assert "00:00:00,000 --> 00:00:01,200\n嗯\n\n" in out
-    assert "00:00:01,200 --> 00:00:02,000\n那个\n\n" in out
+    assert "00:00:00,000 --> 00:00:01,200" in out
+    assert "00:00:01,200 --> 00:00:02,000" in out
+    assert "嗯" in out
+    assert "那个" in out
+    assert "00:00:02,000 --> 00:00:03,600" in out
+    assert "00:00:03,600 --> 00:00:05,000" in out

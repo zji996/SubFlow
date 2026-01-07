@@ -15,7 +15,7 @@ def get_asr_provider(config: dict) -> ASRProvider:
 
             return GLMASRProvider(
                 base_url=config["base_url"],
-                api_key=config.get("api_key"),
+                api_key=str(config.get("api_key") or "abc123"),
                 model=config.get("model", "glm-asr-nano-2512"),
             )
         case _:

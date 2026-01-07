@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 
 def count_tokens(text: str, encoding_name: str = "cl100k_base") -> int:
     """Count tokens in text using tiktoken.
@@ -55,9 +57,9 @@ def truncate_to_tokens(
             return text
         
         if strategy == "head":
-            return enc.decode(tokens[:max_tokens])
+            return cast(str, enc.decode(tokens[:max_tokens]))
         elif strategy == "tail":
-            return enc.decode(tokens[-max_tokens:])
+            return cast(str, enc.decode(tokens[-max_tokens:]))
         else:  # sample
             # Split into 3 parts: beginning, middle, end
             part_size = max_tokens // 3
@@ -69,9 +71,9 @@ def truncate_to_tokens(
             end = tokens[-part_size:]
             
             # Decode each part and join with separator
-            begin_text = enc.decode(begin)
-            middle_text = enc.decode(middle)
-            end_text = enc.decode(end)
+            begin_text = cast(str, enc.decode(begin))
+            middle_text = cast(str, enc.decode(middle))
+            end_text = cast(str, enc.decode(end))
             
             return f"{begin_text}\n\n[...中间省略...]\n\n{middle_text}\n\n[...中间省略...]\n\n{end_text}"
             

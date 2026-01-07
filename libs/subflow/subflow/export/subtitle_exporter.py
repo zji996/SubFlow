@@ -12,27 +12,6 @@ from subflow.models.segment import ASRCorrectedSegment, ASRSegment, SemanticChun
 from subflow.models.subtitle_types import SubtitleEntry, SubtitleExportConfig, SubtitleFormat
 
 
-def _join_segment_texts(parts: list[str]) -> str:
-    out = ""
-    for part in parts:
-        t = (part or "").strip()
-        if not t:
-            continue
-        if out:
-            prev = out[-1]
-            nxt = t[0]
-            if (
-                prev.isascii()
-                and prev.isalnum()
-                and nxt.isascii()
-                and nxt.isalnum()
-                and not out.endswith(" ")
-            ):
-                out += " "
-        out += t
-    return out
-
-
 class SubtitleExporter:
     def build_entries(
         self,
@@ -40,78 +19,34 @@ class SubtitleExporter:
         asr_segments: list[ASRSegment],
         asr_corrected_segments: dict[int, ASRCorrectedSegment] | None,
     ) -> list[SubtitleEntry]:
-        asr_index: dict[int, ASRSegment] = {seg.id: seg for seg in asr_segments}
         corrected_index: dict[int, ASRCorrectedSegment] = dict(asr_corrected_segments or {})
 
-        used_segment_ids: set[int] = set()
+        chunk_by_segment_id: dict[int, SemanticChunk] = {}
+        for semantic_chunk in chunks:
+            for seg_id in list(semantic_chunk.asr_segment_ids or []):
+                if seg_id not in chunk_by_segment_id:
+                    chunk_by_segment_id[int(seg_id)] = semantic_chunk
+
         items: list[tuple[float, float, int, SubtitleEntry]] = []
         seq = 0
 
-        def _segment_text(seg_id: int) -> str:
-            corrected = corrected_index.get(seg_id)
-            if corrected is not None and (corrected.text or "").strip():
-                return corrected.text
-            seg = asr_index.get(seg_id)
-            return (seg.text if seg is not None else "") or ""
-
-        def _segment_time(seg_id: int) -> tuple[float, float]:
-            seg = asr_index.get(seg_id)
-            if seg is None:
-                return 0.0, 0.0
-            return float(seg.start), float(seg.end)
-
-        for chunk in chunks:
-            ids = sorted(list(chunk.asr_segment_ids or []))
-            if not ids:
+        for seg in asr_segments:
+            corrected = corrected_index.get(seg.id)
+            chunk_for_seg = chunk_by_segment_id.get(seg.id)
+            primary = (chunk_for_seg.translation if chunk_for_seg is not None else "") or ""
+            primary = primary.strip()
+            secondary = ((corrected.text if corrected is not None else "") or "").strip() or (
+                (seg.text or "").strip()
+            )
+            if not primary and not secondary:
                 continue
-            used_segment_ids |= set(ids)
-            start, _ = _segment_time(ids[0])
-            _, end = _segment_time(ids[-1])
-            secondary = _join_segment_texts([_segment_text(i) for i in ids])
-            primary = (chunk.translation or "").strip()
+            start, end = float(seg.start), float(seg.end)
             entry = SubtitleEntry(
                 index=0,
                 start=start,
                 end=end,
                 primary_text=primary,
                 secondary_text=secondary,
-            )
-            items.append((start, end, seq, entry))
-            seq += 1
-
-        for seg in asr_segments:
-            corrected = corrected_index.get(seg.id)
-            is_filler = bool(corrected.is_filler) if corrected is not None else False
-            if not is_filler:
-                continue
-            if seg.id in used_segment_ids:
-                continue
-            start, end = float(seg.start), float(seg.end)
-            entry = SubtitleEntry(
-                index=0,
-                start=start,
-                end=end,
-                primary_text="",
-                secondary_text=_segment_text(seg.id),
-            )
-            items.append((start, end, seq, entry))
-            seq += 1
-
-        for seg in asr_segments:
-            if seg.id in used_segment_ids:
-                continue
-            corrected = corrected_index.get(seg.id)
-            if corrected is not None and corrected.is_filler:
-                continue
-            if not (seg.text or "").strip():
-                continue
-            start, end = float(seg.start), float(seg.end)
-            entry = SubtitleEntry(
-                index=0,
-                start=start,
-                end=end,
-                primary_text="",
-                secondary_text=_segment_text(seg.id),
             )
             items.append((start, end, seq, entry))
             seq += 1

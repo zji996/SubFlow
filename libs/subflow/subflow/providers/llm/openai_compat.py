@@ -1,7 +1,10 @@
 """OpenAI-compatible LLM Provider implementation."""
 
+from __future__ import annotations
+
 import json
 import logging
+from typing import Any
 
 import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -20,13 +23,13 @@ class OpenAICompatProvider(LLMProvider):
         base_url: str,
         api_key: str,
         model: str = "gpt-4",
-    ):
+    ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.model = model
         self._client: httpx.AsyncClient | None = None
 
-    def _headers(self) -> dict:
+    def _headers(self) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
@@ -69,13 +72,13 @@ class OpenAICompatProvider(LLMProvider):
             logger.warning("llm request failed: %s", exc)
             raise ProviderError("openai_compat", str(exc)) from exc
 
-        return result["choices"][0]["message"]["content"]
+        return str(result["choices"][0]["message"]["content"])
 
     async def complete_json(
         self,
         messages: list[Message],
         temperature: float = 0.3,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Generate a structured JSON response."""
         # Add JSON instruction to system prompt
         json_messages = list(messages)
@@ -94,7 +97,10 @@ class OpenAICompatProvider(LLMProvider):
                 text = text.split("```json")[1].split("```")[0]
             elif "```" in text:
                 text = text.split("```")[1].split("```")[0]
-            return json.loads(text.strip())
+            data = json.loads(text.strip())
+            if not isinstance(data, dict):
+                raise ValueError(f"Expected JSON object, got {type(data).__name__}")
+            return data
         except json.JSONDecodeError as e:
             raise ValueError(f"Failed to parse JSON response: {e}") from e
 
@@ -107,5 +113,10 @@ class OpenAICompatProvider(LLMProvider):
         await self._get_client()
         return self
 
-    async def __aexit__(self, *args) -> None:
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: object | None,
+    ) -> None:
         await self.close()

@@ -23,8 +23,26 @@
 
 **核心思想**：既然语义切分已经切出完整的语义句子，那么在同一步中完成翻译是最自然的——LLM 已经理解了上下文，无需再开一个 Pass。
 
-**输入 Artifact**: `asr_results.json` + `full_transcript.txt`  
-**输出 Artifact**: `translation_result.json` (语义块 + 翻译 + 时间戳)
+**输入 Artifact**: `asr_segments.json` + `full_transcript.txt`  
+**输出 Artifact**: `global_context.json` + `asr_corrected_segments.json` + `semantic_chunks.json`
+
+---
+
+## 关键修复 (2026-01)
+
+### 1. 简化 LLM 输出
+- LLM 只需要输出 `translation` + `asr_segment_ids`
+- `next_cursor` 由系统自动计算 `max(asr_segment_ids) + 1`
+
+### 2. 优化提示词
+- **必须从段落 0 开始**（除非是纯语气词）
+- **意译**：翻译要通顺自然，传达意思而非逐字翻译
+- **窗口大小 = 6**：每次处理 6 个段落
+
+### 3. 上下文衔接
+- 向 LLM 传递上一轮翻译结果 `【上一轮翻译】`
+
+**效果**: 100% 覆盖率，16 chunks 覆盖 40 个段落
 
 ---
 
@@ -42,9 +60,8 @@
 │ id: int         │     │ id: int             │     │ id: int             │
 │ start: float    │     │ asr_segment_id: int │     │ text: str           │
 │ end: float      │     │ text: str (纠正后)   │     │ translation: str    │
-│ text: str       │     │ corrections: []     │     │ asr_segment_ids: [] │
-└─────────────────┘     │ is_filler: bool     │     └─────────────────────┘
-                        └─────────────────────┘
+│ text: str       │     └─────────────────────┘     │ asr_segment_ids: [] │
+└─────────────────┘                                 └─────────────────────┘
 ```
 
 ### 1. ASRSegment (ASR 原始段落表)
@@ -70,12 +87,10 @@ class ASRCorrectedSegment:
     id: int                        # 纠错段落编号
     asr_segment_id: int            # 关联的 ASRSegment.id
     text: str                      # 纠错后的完整文本（由 LLM 直接输出）
-    is_filler: bool = False        # 是否为纯语气词段落
-    is_hallucination: bool = False # 是否为 ASR 幻觉（不属于视频内容）
 ```
 
 > [!IMPORTANT]
-> **废弃替换式纠错**：不再使用 `corrections` 替换对，改为 LLM 直接输出纠错后的完整文本。
+> **废弃替换式纠错**：不再使用 `corrections` 替换对，LLM 直接输出纠错后的完整文本。
 > 原因：简单字符串替换会导致错误（如 "is" -> "it's" 会把 "this" 变成 "thit's"）。
 
 ### 3. SemanticChunk (语义块表)
@@ -124,9 +139,9 @@ class SemanticChunk:
 1. **一步到位**：切分、纠错、翻译在同一次 LLM 调用中完成
 2. **贪心串行**：每次只处理一个语义块，cursor 前进，直到处理完所有段落
 3. **语义完整**：每块表达一个完整意思，便于翻译
-4. **跳过语气词**：纯语气词段落标记为 filler，不参与翻译
-5. **仅谐音纠错**：只纠正 ASR 中的谐音字错误，不纠正断句、重复词等
-6. **替换式纠错**：只输出 corrections 替换对，不输出完整纠错后文本
+4. **仅谐音纠错**：只纠正 ASR 中的谐音字错误，不纠正断句、重复词等
+5. **直接输出纠错文本**：不输出替换对，LLM 直接输出纠错后的完整文本
+6. **完整覆盖**：保证段落不遗漏；未进入 chunk 的段落在导出阶段仍会逐段输出（主字幕可能为空）
 
 ### 贪心串行流程
 
@@ -136,106 +151,75 @@ while cursor < len(asr_segments):
     window = asr_segments[cursor : cursor + WINDOW_SIZE]
     result = LLM(window, context)
     
-    # 1. 记录 filler 段落
-    for id in result.filler_segment_ids:
-        create_corrected_segment(id, is_filler=True)
+    # 1. 记录纠错文本（可选；LLM 直接输出完整文本）
+    for seg in result.corrected_segments:  # optional
+        create_corrected_segment(seg.asr_segment_id, text=seg.text)
     
-    # 2. 应用纠错（通过字符串替换）
-    if result.corrected_segments:  # 可选字段，可能不存在或为空
-        for seg in result.corrected_segments:
-            apply_corrections_by_replace(seg.asr_segment_id, seg.corrections)
+    # 2. 创建语义块（已包含翻译）
+    create_semantic_chunk(result.translation, result.asr_segment_ids)
     
-    # 3. 创建语义块（已包含翻译）
-    create_semantic_chunk(result.chunk)
-    
-    # 4. 前进 cursor
-    cursor = result.next_cursor
+    # 3. 前进 cursor（系统自动计算 max(asr_segment_ids) + 1）
+    cursor = next_cursor
 ```
 
-### 纠错文本生成逻辑
+### 纠错文本来源
 
-由于 LLM 只输出 `corrections` 替换对，纠错后的文本需要通过字符串替换生成：
+LLM 直接输出 `corrected_segments[].text` 作为纠错后的完整文本，避免替换式纠错导致的误替换问题。
 
-```python
-def apply_corrections(original_text: str, corrections: list[Correction]) -> str:
-    """Apply corrections to original ASR text via string replacement."""
-    result = original_text
-    for corr in corrections:
-        result = result.replace(corr.original, corr.corrected)
-    return result
-```
+### System Prompt (优化版)
 
-### System Prompt
+> [!IMPORTANT]
+> **优化要点**：
+> - `next_cursor` 由系统自动计算（`max(asr_segment_ids) + 1`），无需 LLM 输出
+> - LLM 收到上一个语义块作为上下文参考
 
 ````text
-你是一个专业的字幕切分、纠错与翻译助手。
+从 ASR 段落提取第一个语义完整的翻译单元。
 
-任务：从给定窗口的 ASR 段落中，提取“第一个”语义完整、翻译友好的语义块（字幕翻译单元），并输出其翻译。
+规则：
+1. 必须从段落0开始（除非是纯语气词如um/uh则跳过）
+2. 延伸到语义完整为止
+3. 意译：翻译要通顺自然，传达意思而非逐字翻译
+4. 删除幻觉（如 transcribe the speech）
 
-处理规则：
-1) 跳过前置语气词：如“嗯”“那个”“就是”“然后”等无实际意义的填充词
-2) ASR 纠错：**仅修正谐音字错误**，不修正断句错误、重复词、漏字等其他问题
-3) 语义完整性：每块表达一个完整意思
-4) 翻译友好：切分点便于目标语言自然表达
-5) 长度适中：每块原文 10-30 词（翻译后约 15-40 汉字）
-6) 时间对齐：输出必须保留与原始 ASR 段落的映射关系（asr_segment_ids）
-7) 翻译：输出 chunk.translation，适合字幕显示；遵循 glossary 与 translation_notes
-
-输出格式（JSON，仅输出第一个语义块；所有 id 都是窗口内相对序号；用 ```json ... ``` 包裹）：
+只输出 JSON：
 ```json
 {
-  "filler_segment_ids": [0, 1],
-  "corrected_segments": [
-    {
-      "asr_segment_id": 2,
-      "corrections": [
-        {"original": "错误文本", "corrected": "正确文本"}
-      ]
-    }
-  ],
-  "chunk": {
-    "text": "纠错后语义块原文",
-    "translation": "翻译结果（字幕风格）",
-    "asr_segment_ids": [2, 3]
-  },
-  "next_cursor": 4
+  "translation": "意译结果",
+  "asr_segment_ids": [0, 1, 2]
 }
 ```
-
-说明：
-- `filler_segment_ids`: 被跳过的语气词段落 ID（从当前窗口开头算起）
-- `corrected_segments`: 可选字段，如果没有需要纠正的谐音字错误，可以省略该字段或设为空数组
-- `corrections`: 只包含需要替换的 original 和 corrected 文本对，客户端通过字符串替换生成纠错后文本
-- `chunk.asr_segment_ids`: 构成该语义块的 ASR 段落 ID
-- `next_cursor`: 下一次应从 segments 中的哪个位置继续（相对于输入数组）
-- 如果剩余全是语气词，chunk 可为 null，next_cursor 设为最后位置
 ````
+
+> 说明：实现层额外兼容 `corrected_segments`（可选）以及 legacy 的 `chunk` 包装结构，方便逐步迁移。
+
+### 上一语义块上下文
+
+从第二个窗口开始，user input 中会包含上一个语义块的原文和译文，帮助 LLM 保持衔接：
+
+```
+上一个语义块（保持衔接）：
+- 原文: Pretty soon, version nine is coming out.
+- 译文: 版本9很快就要发布了。
+```
 
 ### User Input (动态内容)
 
 ````text
 目标语言：en
 
-视频全局上下文（用于风格与术语一致性参考）：
-```json
-{
-  "topic": "人工智能应用",
-  "domain": "技术",
-  "style": "技术",
-  "glossary": {"人工智能": "AI", "机器学习": "machine learning"},
-  "translation_notes": ["术语要保持一致，尽量口语化、适合字幕显示"]
-}
-```
+【上一轮翻译】版本9很快就要发布了。
 
-窗口内 ASR 段落（id 为窗口内相对序号）：
-```json
+全局上下文：
+{"topic":"人工智能应用","domain":"技术","style":"技术","glossary":{"人工智能":"AI","机器学习":"machine learning"},"translation_notes":["术语要保持一致，尽量口语化、适合字幕显示"]}
+
+ASR 段落：
 [
   {"id": 0, "start": 0.0, "end": 1.2, "text": "嗯"},
   {"id": 1, "start": 1.2, "end": 2.0, "text": "那个"},
   {"id": 2, "start": 2.0, "end": 3.6, "text": "我们今天聊人工只能"},
   {"id": 3, "start": 3.6, "end": 5.0, "text": "的应用场景"}
 ]
-```
 ````
 
 ### LLM 输出示例
@@ -243,29 +227,19 @@ def apply_corrections(original_text: str, corrections: list[Correction]) -> str:
 **示例 1：有谐音字纠错**
 ```json
 {
-  "filler_segment_ids": [0, 1],
+  "translation": "Today we'll discuss AI application scenarios",
+  "asr_segment_ids": [2, 3],
   "corrected_segments": [
-    {"asr_segment_id": 2, "corrections": [{"original": "人工只能", "corrected": "人工智能"}]}
-  ],
-  "chunk": {
-    "text": "我们今天聊人工智能的应用场景",
-    "translation": "Today we'll discuss AI application scenarios",
-    "asr_segment_ids": [2, 3]
-  },
-  "next_cursor": 4
+    {"asr_segment_id": 2, "text": "我们今天聊人工智能"}
+  ]
 }
 ```
 
-**示例 2：无纠错（corrected_segments 省略）**
+**示例 2：无纠错（`corrected_segments` 省略）**
 ```json
 {
-  "filler_segment_ids": [],
-  "chunk": {
-    "text": "这是一段没有错误的文本",
-    "translation": "This is a text without errors",
-    "asr_segment_ids": [0, 1]
-  },
-  "next_cursor": 2
+  "translation": "This is a text without errors",
+  "asr_segment_ids": [0, 1]
 }
 ```
 
@@ -273,19 +247,35 @@ def apply_corrections(original_text: str, corrections: list[Correction]) -> str:
 
 ## 字幕导出
 
-通过 `asr_segment_ids` 查询时间戳：
+每个 **ASR 段落单独成行**，共享其所属 `SemanticChunk` 的翻译（如果存在），并输出对应段落的纠错后原文：
+
+- `start/end`：始终来自 `ASRSegment`（时间戳权威来源）
+- `primary_text`：该段落所属语义块的翻译（可为空）
+- `secondary_text`：该段落的纠错后原文
 
 ```python
-def export_subtitle(chunks: list[SemanticChunk], 
-                    asr_segments: dict[int, ASRSegment]) -> str:
-    subtitles = []
+def export_subtitle_per_asr_segment(
+    chunks: list[SemanticChunk],
+    asr_segments: list[ASRSegment],
+    corrected: dict[int, ASRCorrectedSegment],
+) -> str:
+    # Build segment_id -> chunk mapping
+    chunk_by_seg_id: dict[int, SemanticChunk] = {}
     for chunk in chunks:
-        start = asr_segments[chunk.asr_segment_ids[0]].start
-        end = asr_segments[chunk.asr_segment_ids[-1]].end
+        for seg_id in chunk.asr_segment_ids:
+            chunk_by_seg_id[seg_id] = chunk
+
+    subtitles = []
+    for seg in asr_segments:
+        corr = corrected.get(seg.id)
+        chunk = chunk_by_seg_id.get(seg.id)
+        translation = (chunk.translation if chunk is not None else "") or ""
+        source = (corr.text if corr is not None else seg.text) or ""
         subtitles.append({
-            "start": start,
-            "end": end,
-            "text": chunk.translation
+            "start": seg.start,
+            "end": seg.end,
+            "translation": translation,
+            "source": source,
         })
     return format_as_srt(subtitles)
 ```
@@ -313,15 +303,15 @@ Pass 1 输出:
   GlobalContext: topic="人工智能", domain="技术", glossary={...}
 
 Pass 2 LLM 输出 (贪心串行，一次调用):
-  corrected_segments: [{asr_segment_id: 2, corrections: [{人工只能→人工智能}]}]
-  # 注意：segment 3 没有谐音错误，不在 corrected_segments 中
+  translation="Today we'll discuss AI application scenarios"
+  asr_segment_ids=[2, 3]
+  corrected_segments=[{asr_segment_id: 2, text: "我们今天聊人工智能"}]  # 可选
 
 应用纠错后 ASRCorrectedSegment[]:
-  [0] asr_segment_id=0, is_filler=true, text="嗯"
-  [1] asr_segment_id=1, is_filler=true, text="那个"
-  [2] text="我们今天聊人工智能", corrections=[{人工只能→人工智能}]
-      (通过 "人工只能" -> "人工智能" 替换生成)
-  [3] text="的应用场景", corrections=[]
+  [0] asr_segment_id=0, text="嗯"
+  [1] asr_segment_id=1, text="那个"
+  [2] asr_segment_id=2, text="我们今天聊人工智能"
+  [3] asr_segment_id=3, text="的应用场景"
 
 SemanticChunk[]:
   [0] text="我们今天聊人工智能的应用场景"
@@ -329,10 +319,14 @@ SemanticChunk[]:
       asr_segment_ids=[2, 3]
 
 字幕导出:
-  start = ASRSegment[2].start = 2.0
-  end = ASRSegment[3].end = 5.0
-
+  # 每个段落单独成行，共享同一个 translation
   1
-  00:00:02,000 --> 00:00:05,000
+  00:00:02,000 --> 00:00:03,600
   Today we'll discuss AI application scenarios
+  我们今天聊人工智能
+
+  2
+  00:00:03,600 --> 00:00:05,000
+  Today we'll discuss AI application scenarios
+  的应用场景
 ```

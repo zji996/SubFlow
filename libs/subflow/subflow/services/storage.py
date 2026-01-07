@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -15,14 +16,14 @@ class StorageConfig:
 
 
 class StorageService:
-    def __init__(self, endpoint: str, access_key: str, secret_key: str, bucket: str):
+    def __init__(self, endpoint: str, access_key: str, secret_key: str, bucket: str) -> None:
         self.endpoint = endpoint.rstrip("/")
         self.access_key = access_key
         self.secret_key = secret_key
         self.bucket = bucket
-        self._client = None
+        self._client: Any | None = None
 
-    def _ensure_client(self):
+    def _ensure_client(self) -> Any:
         if self._client is not None:
             return self._client
         import boto3
@@ -59,10 +60,12 @@ class StorageService:
         remote_key = remote_key.lstrip("/")
 
         def _gen() -> str:
-            return client.generate_presigned_url(
-                "get_object",
-                Params={"Bucket": self.bucket, "Key": remote_key},
-                ExpiresIn=expires_in,
+            return str(
+                client.generate_presigned_url(
+                    "get_object",
+                    Params={"Bucket": self.bucket, "Key": remote_key},
+                    ExpiresIn=expires_in,
+                )
             )
 
         return await asyncio.to_thread(_gen)

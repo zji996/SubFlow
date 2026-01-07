@@ -16,16 +16,15 @@ def _make_window() -> list[ASRSegment]:
     ]
 
 
-def test_parse_result_converts_relative_ids_to_absolute_and_applies_corrections() -> None:
+def test_parse_result_converts_relative_ids_to_absolute_and_uses_direct_text() -> None:
     stage = SemanticChunkingPass(Settings())
     window = _make_window()
 
     result = {
-        "filler_segment_ids": [0, 1],
         "corrected_segments": [
             {
                 "asr_segment_id": 2,
-                "corrections": [{"original": "人工只能", "corrected": "人工智能"}],
+                "text": "我们今天聊人工智能",
             }
         ],
         "chunk": {
@@ -33,28 +32,43 @@ def test_parse_result_converts_relative_ids_to_absolute_and_applies_corrections(
             "translation": "Today we'll discuss AI application scenarios",
             "asr_segment_ids": [2, 3],
         },
-        "next_cursor": 4,
     }
 
-    filler_ids, corrected_map, chunk, next_cursor = stage._parse_result(
+    corrected_map, chunk, next_cursor = stage._parse_result(
         result,
         window_start=10,
         window_segments=window,
         chunk_id=7,
     )
 
-    assert filler_ids == {10, 11}
     assert next_cursor == 14
 
     assert 12 in corrected_map
     assert corrected_map[12].text == "我们今天聊人工智能"
-    assert corrected_map[12].corrections[0].original == "人工只能"
-    assert corrected_map[12].corrections[0].corrected == "人工智能"
 
     assert chunk is not None
     assert chunk.id == 7
     assert chunk.asr_segment_ids == [12, 13]
+    assert chunk.text == "我们今天聊人工智能 的应用场景"
     assert chunk.translation == "Today we'll discuss AI application scenarios"
+
+
+def test_parse_result_handles_no_chunk_and_advances_cursor() -> None:
+    stage = SemanticChunkingPass(Settings())
+    window = _make_window()
+
+    result: dict = {}
+
+    corrected_map, chunk, next_cursor = stage._parse_result(
+        result,
+        window_start=10,
+        window_segments=window,
+        chunk_id=0,
+    )
+
+    assert corrected_map == {}
+    assert chunk is None
+    assert next_cursor == 16
 
 
 def test_parse_result_handles_missing_corrected_segments_key() -> None:
@@ -62,16 +76,14 @@ def test_parse_result_handles_missing_corrected_segments_key() -> None:
     window = _make_window()
 
     result = {
-        "filler_segment_ids": [0, 1],
         "chunk": {
             "text": "我们今天聊人工只能的应用场景",
             "translation": "Today we'll discuss AI application scenarios",
             "asr_segment_ids": [2, 3],
         },
-        "next_cursor": 4,
     }
 
-    _, corrected_map, _, _ = stage._parse_result(
+    corrected_map, chunk, next_cursor = stage._parse_result(
         result,
         window_start=10,
         window_segments=window,
@@ -79,6 +91,8 @@ def test_parse_result_handles_missing_corrected_segments_key() -> None:
     )
 
     assert corrected_map == {}
+    assert chunk is not None
+    assert next_cursor == 14
 
 
 def test_parse_result_handles_empty_corrected_segments_array() -> None:
@@ -86,17 +100,15 @@ def test_parse_result_handles_empty_corrected_segments_array() -> None:
     window = _make_window()
 
     result = {
-        "filler_segment_ids": [0, 1],
         "corrected_segments": [],
         "chunk": {
             "text": "我们今天聊人工只能的应用场景",
             "translation": "Today we'll discuss AI application scenarios",
             "asr_segment_ids": [2, 3],
         },
-        "next_cursor": 4,
     }
 
-    _, corrected_map, _, _ = stage._parse_result(
+    corrected_map, chunk, next_cursor = stage._parse_result(
         result,
         window_start=10,
         window_segments=window,
@@ -104,23 +116,24 @@ def test_parse_result_handles_empty_corrected_segments_array() -> None:
     )
 
     assert corrected_map == {}
+    assert chunk is not None
+    assert next_cursor == 14
 
 
-def test_parse_result_preserves_original_text_when_no_corrections() -> None:
+def test_parse_result_falls_back_to_original_text_when_text_missing() -> None:
     stage = SemanticChunkingPass(Settings())
     window = _make_window()
 
     result = {
-        "corrected_segments": [{"asr_segment_id": 2, "corrections": []}],
+        "corrected_segments": [{"asr_segment_id": 2}],
         "chunk": {
             "text": "我们今天聊人工只能的应用场景",
             "translation": "Today we'll discuss AI application scenarios",
             "asr_segment_ids": [2, 3],
         },
-        "next_cursor": 4,
     }
 
-    _, corrected_map, _, _ = stage._parse_result(
+    corrected_map, chunk, next_cursor = stage._parse_result(
         result,
         window_start=10,
         window_segments=window,
@@ -128,6 +141,8 @@ def test_parse_result_preserves_original_text_when_no_corrections() -> None:
     )
 
     assert corrected_map[12].text == "我们今天聊人工只能"
+    assert chunk is not None
+    assert next_cursor == 14
 
 
 def test_parse_result_ignores_out_of_window_ids() -> None:
@@ -135,23 +150,21 @@ def test_parse_result_ignores_out_of_window_ids() -> None:
     window = _make_window()
 
     result = {
-        "filler_segment_ids": [999],
-        "corrected_segments": [{"asr_segment_id": 999, "corrections": []}],
+        "corrected_segments": [{"asr_segment_id": 999, "text": "x"}],
         "chunk": {
             "text": "x",
             "translation": "y",
             "asr_segment_ids": [999],
         },
-        "next_cursor": 1,
     }
 
-    filler_ids, corrected_map, chunk, _ = stage._parse_result(
+    corrected_map, chunk, next_cursor = stage._parse_result(
         result,
         window_start=10,
         window_segments=window,
         chunk_id=1,
     )
 
-    assert filler_ids == set()
     assert corrected_map == {}
     assert chunk is None
+    assert next_cursor == 16

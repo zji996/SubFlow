@@ -5,6 +5,7 @@ from __future__ import annotations
 import tempfile
 import logging
 from pathlib import Path
+from typing import cast
 
 from subflow.config import Settings
 from subflow.models.segment import ASRSegment, VADSegment
@@ -21,7 +22,7 @@ class ASRStage(Stage):
 
     name = "asr"
 
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.provider = GLMASRProvider(
             base_url=settings.asr.base_url,
@@ -47,7 +48,7 @@ class ASRStage(Stage):
             - full_transcript: Complete transcript text
             - source_language: Detected or specified source language
         """
-        context = dict(context)
+        context = cast(PipelineContext, dict(context))
         vocals_path: str = context["vocals_audio_path"]
         vad_segments: list[VADSegment] = context["vad_segments"]
         source_language = context.get("source_language") or None

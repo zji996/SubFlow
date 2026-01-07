@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from pathlib import Path
+from typing import cast
 
 import httpx
 
@@ -20,7 +21,7 @@ logger = logging.getLogger(__name__)
 class AudioPreprocessStage(Stage):
     name = "audio_preprocess"
 
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.ffmpeg = FFmpegProvider(ffmpeg_bin=settings.audio.ffmpeg_bin)
         self.demucs = DemucsProvider(
@@ -90,7 +91,7 @@ class AudioPreprocessStage(Stage):
                 "`CUDA_VISIBLE_DEVICES=1` if GPU0 is occupied."
             ) from exc
 
-        context = dict(context)
+        context = cast(PipelineContext, dict(context))
         context["video_path"] = str(video_path)
         context["audio_path"] = str(audio_path)
         context["vocals_audio_path"] = vocals_path

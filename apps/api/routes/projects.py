@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Any
+
+import httpx
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 from redis.asyncio import Redis
 
 from services.project_service import ProjectService
+from subflow.config import Settings
 from subflow.models.project import Project, StageName
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -35,6 +40,11 @@ class ProjectResponse(BaseModel):
     current_stage: int
     artifacts: dict
     stage_runs: list[dict]
+
+class SubtitleResponse(BaseModel):
+    format: str = "srt"
+    source: str
+    content: str
 
 
 def _service(request: Request) -> ProjectService:
@@ -129,6 +139,46 @@ async def get_artifacts(request: Request, project_id: str, stage: StageName) -> 
     return {"project_id": project_id, "stage": stage.value, "artifacts": artifacts.get(stage.value)}
 
 
+@router.get("/{project_id}/subtitles", response_model=SubtitleResponse)
+async def get_subtitles(request: Request, project_id: str) -> SubtitleResponse:
+    service = _service(request)
+    project = await service.get_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="project not found")
+
+    export: dict[str, Any] = (project.artifacts or {}).get(StageName.EXPORT.value) or {}
+    local_path = export.get("subtitles.srt")
+    presigned_url = export.get("subtitles.srt_url")
+
+    settings: Settings | None = getattr(request.app.state, "settings", None)
+    data_root = Path(settings.data_dir).resolve() if settings is not None else None
+
+    if local_path:
+        try:
+            path = Path(str(local_path)).expanduser().resolve()
+            if data_root is not None and path != data_root and data_root not in path.parents:
+                raise HTTPException(status_code=400, detail="invalid subtitles path")
+            content = path.read_text(encoding="utf-8", errors="replace")
+            return SubtitleResponse(source="local", content=content)
+        except FileNotFoundError:
+            pass
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"failed to read subtitles: {exc}") from exc
+
+    if presigned_url:
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                resp = await client.get(str(presigned_url))
+                resp.raise_for_status()
+                return SubtitleResponse(source="s3", content=resp.text)
+        except httpx.HTTPError as exc:
+            raise HTTPException(status_code=502, detail=f"failed to fetch subtitles: {exc}") from exc
+
+    raise HTTPException(status_code=404, detail="subtitles not found")
+
+
 @router.delete("/{project_id}")
 async def delete_project(request: Request, project_id: str) -> dict:
     service = _service(request)
@@ -136,4 +186,3 @@ async def delete_project(request: Request, project_id: str) -> dict:
     if not ok:
         raise HTTPException(status_code=404, detail="project not found")
     return {"deleted": True, "project_id": project_id}
-

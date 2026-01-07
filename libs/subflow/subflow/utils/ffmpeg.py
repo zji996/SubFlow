@@ -20,9 +20,8 @@ def resolve_ffmpeg_bin(ffmpeg_bin: str = "ffmpeg") -> str:
         return found
 
     try:
-        import imageio_ffmpeg  # type: ignore
+        import imageio_ffmpeg
 
         return str(imageio_ffmpeg.get_ffmpeg_exe())
     except Exception:
         return ffmpeg_bin
-

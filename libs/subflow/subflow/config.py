@@ -1,6 +1,7 @@
 """Configuration management using pydantic-settings."""
 
 from pathlib import Path
+from typing import Any
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -147,7 +148,7 @@ class Settings(BaseSettings):
     # Logging
     logging: LoggingSettings = LoggingSettings()
 
-    def model_post_init(self, __context) -> None:  # type: ignore[override]
+    def model_post_init(self, __context: Any) -> None:
         root = Path(__file__).resolve().parents[3]
 
         def _abs_dir(p: str) -> str:

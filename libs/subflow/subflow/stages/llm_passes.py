@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import logging
 import json
-from typing import Any
+from typing import Any, cast
 
 from subflow.config import Settings
 from subflow.exceptions import StageExecutionError
-from subflow.models.segment import ASRCorrectedSegment, ASRSegment, Correction, SemanticChunk
+from subflow.models.segment import ASRCorrectedSegment, ASRSegment, SemanticChunk
 from subflow.pipeline.context import PipelineContext
 from subflow.providers import get_llm_provider
 from subflow.providers.llm import Message
@@ -40,7 +40,7 @@ class GlobalUnderstandingPass(Stage):
     MAX_TRANSCRIPT_TOKENS = 6000
     SYSTEM_PROMPT_TOKENS = 500  # Reserved for system prompt
     
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.llm = get_llm_provider(settings.llm.model_dump())
         self.json_helper = LLMJSONHelper(self.llm, max_retries=3)
@@ -69,7 +69,7 @@ class GlobalUnderstandingPass(Stage):
         )
 
     async def execute(self, context: PipelineContext) -> PipelineContext:
-        context = dict(context)
+        context = cast(PipelineContext, dict(context))
         transcript = str(context.get("full_transcript", "")).strip()
 
         # Fallback if no API key
@@ -105,7 +105,9 @@ class GlobalUnderstandingPass(Stage):
                 Message(role="user", content=transcript),
             ]
         )
-        context["global_context"] = result
+        if not isinstance(result, dict):
+            raise StageExecutionError(self.name, "Global understanding output must be a JSON object")
+        context["global_context"] = cast(dict[str, Any], result)
         logger.info("llm_global_understanding done")
         return context
 
@@ -116,10 +118,10 @@ class SemanticChunkingPass(Stage):
     name = "llm_semantic_chunking"
     
     # Greedy algorithm settings
-    WINDOW_SIZE = 40  # ASR segments to consider at once
+    WINDOW_SIZE = 6  # ASR segments to consider at once
     CHUNKS_PER_REQUEST = 1  # Extract the first meaningful chunk each request
 
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.llm = get_llm_provider(settings.llm.model_dump())
         self.json_helper = LLMJSONHelper(self.llm, max_retries=3)
@@ -132,42 +134,19 @@ class SemanticChunkingPass(Stage):
 
     def _get_system_prompt(self) -> str:
         return (
-            "你是一个专业的字幕切分、纠错与翻译助手。\n\n"
-            "任务：从给定窗口的 ASR 段落中，提取“第一个”语义完整、翻译友好的语义块（字幕翻译单元），并输出其翻译。\n\n"
-            "处理规则：\n"
-            '1) 跳过前置语气词：如“嗯”“那个”“就是”“然后”等无实际意义的填充词\n'
-            "2) ASR 纠错：仅修正谐音字错误；不修正断句错误、重复词、漏字等其他问题\n"
-            "3) 语义完整性：每块表达一个完整意思\n"
-            "4) 翻译友好：切分点便于目标语言自然表达\n"
-            "5) 长度适中：每块原文 10-30 词（翻译后约 15-40 汉字）\n"
-            "6) 时间对齐：输出必须保留与原始 ASR 段落的映射关系（asr_segment_ids）\n"
-            "7) 翻译：输出 chunk.translation，适合字幕显示；遵循 glossary 与 translation_notes\n\n"
-            "输出格式（JSON，仅输出第一个语义块；所有 id 都是窗口内相对序号；用 ```json ... ``` 包裹）：\n"
+            "从 ASR 段落提取第一个语义完整的翻译单元。\n\n"
+            "规则：\n"
+            "1. 必须从段落0开始（除非是纯语气词如um/uh则跳过）\n"
+            "2. 延伸到语义完整为止\n"
+            "3. 意译：翻译要通顺自然，传达意思而非逐字翻译\n"
+            "4. 删除幻觉（如 transcribe the speech）\n\n"
+            "只输出 JSON：\n"
             "```json\n"
             "{\n"
-            '  "filler_segment_ids": [0, 1],\n'
-            '  "corrected_segments": [\n'
-            "    {\n"
-            '      "asr_segment_id": 2,\n'
-            '      "corrections": [\n'
-            '        {"original": "错误文本", "corrected": "正确文本"}\n'
-            "      ]\n"
-            "    }\n"
-            "  ],\n"
-            '  "chunk": {\n'
-            '    "text": "纠错后语义块原文",\n'
-            '    "translation": "翻译结果（字幕风格）",\n'
-            '    "asr_segment_ids": [2, 3]\n'
-            "  },\n"
-            '  "next_cursor": 4\n'
+            '  "translation": "意译结果",\n'
+            '  "asr_segment_ids": [0, 1, 2]\n'
             "}\n"
-            "```\n\n"
-            "说明：\n"
-            "- `filler_segment_ids`: 被跳过的语气词段落 ID（从当前窗口开头算起）\n"
-            "- `corrected_segments`: 被纠错的 ASR 段落；如无纠错可为空数组或直接省略\n"
-            "- `chunk.asr_segment_ids`: 构成该语义块的 ASR 段落 ID\n"
-            "- `next_cursor`: 下一次应从 segments 中的哪个位置继续（相对于输入数组）\n"
-            "- 如果剩余全是语气词，chunk 可为 null，next_cursor 设为最后位置\n"
+            "```"
         )
 
     def _get_user_input(
@@ -176,14 +155,19 @@ class SemanticChunkingPass(Stage):
         target_language: str,
         input_context: dict[str, Any],
         asr_payload: list[dict],
+        previous_chunk: SemanticChunk | None = None,
     ) -> str:
-        return (
-            f"目标语言：{target_language}\n\n"
-            "视频全局上下文（用于风格与术语一致性参考）：\n"
-            f"```json\n{json.dumps(input_context, ensure_ascii=False, indent=2)}\n```\n\n"
-            "窗口内 ASR 段落（id 为窗口内相对序号）：\n"
-            f"```json\n{json.dumps(asr_payload, ensure_ascii=False, indent=2)}\n```\n"
-        )
+        parts = [f"目标语言：{target_language}"]
+
+        if previous_chunk is not None:
+            parts.append(f"\n【上一轮翻译】{previous_chunk.translation}")
+
+        compact_context = _compact_global_context(input_context)
+        if compact_context:
+            parts.append(f"\n全局上下文：\n{json.dumps(compact_context, ensure_ascii=False)}")
+
+        parts.append(f"\nASR 段落：\n{json.dumps(asr_payload, ensure_ascii=False)}")
+        return "\n".join(parts)
 
     @staticmethod
     def _to_absolute_ids(
@@ -206,16 +190,6 @@ class SemanticChunkingPass(Stage):
                 continue
         return out
 
-    @staticmethod
-    def _apply_corrections(original_text: str, corrections: list[Correction]) -> str:
-        result = original_text
-        for corr in corrections:
-            if not corr.original or not corr.corrected:
-                continue
-            if corr.original == corr.corrected:
-                continue
-            result = result.replace(corr.original, corr.corrected)
-        return result
 
     def _parse_result(
         self,
@@ -224,14 +198,9 @@ class SemanticChunkingPass(Stage):
         window_start: int,
         window_segments: list[ASRSegment],
         chunk_id: int,
-    ) -> tuple[set[int], dict[int, ASRCorrectedSegment], SemanticChunk | None, int]:
+    ) -> tuple[dict[int, ASRCorrectedSegment], SemanticChunk | None, int]:
         window_len = len(window_segments)
         window_by_abs_id = {window_start + i: seg for i, seg in enumerate(window_segments)}
-
-        filler_rel = [int(x) for x in list(result.get("filler_segment_ids", []) or [])]
-        filler_abs = set(
-            self._to_absolute_ids(filler_rel, window_start=window_start, window_len=window_len)
-        )
 
         corrected_map: dict[int, ASRCorrectedSegment] = {}
         for item in list(result.get("corrected_segments", []) or []):
@@ -247,61 +216,63 @@ class SemanticChunkingPass(Stage):
                 continue
             abs_id = abs_ids[0]
 
-            corrections: list[Correction] = []
-            for corr in list(item.get("corrections", []) or []):
-                if not isinstance(corr, dict):
-                    continue
-                corrections.append(
-                    Correction(
-                        original=str(corr.get("original", "")).strip(),
-                        corrected=str(corr.get("corrected", "")).strip(),
-                    )
-                )
-
-            fallback_text = str(item.get("text", "")).strip()
-            if fallback_text:
-                corrected_text = fallback_text
-            else:
-                original_text = str(getattr(window_by_abs_id.get(abs_id), "text", "") or "")
-                corrected_text = self._apply_corrections(original_text, corrections)
+            corrected_text = str(item.get("text", "")).strip()
+            if not corrected_text:
+                corrected_text = str(getattr(window_by_abs_id.get(abs_id), "text", "") or "").strip()
 
             corrected_map[abs_id] = ASRCorrectedSegment(
                 id=abs_id,
                 asr_segment_id=abs_id,
-                text=corrected_text.strip(),
-                corrections=corrections,
-                is_filler=False,
+                text=corrected_text,
             )
 
+        # Parse chunk from top-level fields (simplified format)
+        raw_ids = result.get("asr_segment_ids", [])
+        # Also support nested chunk format for backward compatibility
         raw_chunk = result.get("chunk")
-        chunk: SemanticChunk | None = None
         if isinstance(raw_chunk, dict):
-            raw_ids = raw_chunk.get("asr_segment_ids", raw_chunk.get("source_segment_ids", []))
-            asr_segment_ids = self._to_absolute_ids(
-                [int(x) for x in list(raw_ids or [])],
-                window_start=window_start,
-                window_len=window_len,
-            )
-            text = str(raw_chunk.get("text", "")).strip()
+            raw_ids = raw_chunk.get("asr_segment_ids", raw_chunk.get("source_segment_ids", raw_ids))
+        
+        asr_segment_ids = self._to_absolute_ids(
+            [int(x) for x in list(raw_ids or [])],
+            window_start=window_start,
+            window_len=window_len,
+        )
+        
+        # Get translation from top level or nested chunk
+        translation = str(result.get("translation", "")).strip()
+        if not translation and isinstance(raw_chunk, dict):
             translation = str(raw_chunk.get("translation", "")).strip()
-            if text and asr_segment_ids:
-                chunk = SemanticChunk(
-                    id=chunk_id,
-                    text=text,
-                    translation=translation or text,
-                    asr_segment_ids=asr_segment_ids,
-                )
+        
+        chunk: SemanticChunk | None = None
+        if asr_segment_ids and translation:
+            # Build text from corrected segments or original
+            text_parts = []
+            for seg_id in asr_segment_ids:
+                if seg_id in corrected_map:
+                    text_parts.append(corrected_map[seg_id].text)
+                elif seg_id in window_by_abs_id:
+                    text_parts.append(window_by_abs_id[seg_id].text)
+            text = " ".join(text_parts)
+            
+            chunk = SemanticChunk(
+                id=chunk_id,
+                text=text,
+                translation=translation,
+                asr_segment_ids=asr_segment_ids,
+            )
 
-        raw_next = int(result.get("next_cursor", window_len))
-        if 0 <= raw_next <= window_len:
-            next_cursor = window_start + raw_next
+        # Auto-calculate next_cursor from chunk.asr_segment_ids
+        if chunk is not None and chunk.asr_segment_ids:
+            next_cursor = max(chunk.asr_segment_ids) + 1
         else:
-            next_cursor = raw_next
+            # No chunk, force advance by window size to avoid infinite loop
+            next_cursor = window_start + len(window_segments)
 
-        return filler_abs, corrected_map, chunk, next_cursor
+        return corrected_map, chunk, next_cursor
 
     async def execute(self, context: PipelineContext) -> PipelineContext:
-        context = dict(context)
+        context = cast(PipelineContext, dict(context))
         asr_segments: list[ASRSegment] = list(context.get("asr_segments", []))
         target_language = str(context.get("target_language", "zh"))
         
@@ -324,8 +295,6 @@ class SemanticChunkingPass(Stage):
                     id=seg.id,
                     asr_segment_id=seg.id,
                     text=seg.text,
-                    corrections=[],
-                    is_filler=False,
                 )
                 for seg in asr_segments
             }
@@ -337,7 +306,6 @@ class SemanticChunkingPass(Stage):
         cursor = 0
         chunk_id = 0
         input_context = _compact_global_context(context.get("global_context"))
-        filler_ids: set[int] = set()
         corrected_segments: dict[int, ASRCorrectedSegment] = dict(
             context.get("asr_corrected_segments", {}) or {}
         )
@@ -359,10 +327,14 @@ class SemanticChunkingPass(Stage):
             
             # Call LLM
             system_prompt = self._get_system_prompt()
+            # Get previous chunk for context (if any)
+            previous_chunk = all_chunks[-1] if all_chunks else None
+            
             user_input = self._get_user_input(
                 target_language=target_language,
                 input_context=input_context,
                 asr_payload=asr_payload,
+                previous_chunk=previous_chunk,
             )
             result = await self.json_helper.complete_json(
                 [
@@ -373,15 +345,14 @@ class SemanticChunkingPass(Stage):
             
             if not isinstance(result, dict):
                 raise StageExecutionError(self.name, "Semantic chunking output must be a JSON object")
-            
-            new_filler_ids, new_corrected, new_chunk, next_cursor = self._parse_result(
+
+            new_corrected, new_chunk, next_cursor = self._parse_result(
                 result,
                 window_start=cursor,
                 window_segments=window,
                 chunk_id=chunk_id,
             )
 
-            filler_ids |= new_filler_ids
             corrected_segments.update(new_corrected)
 
             # Apply corrected segment text back to ASR segments
@@ -403,31 +374,25 @@ class SemanticChunkingPass(Stage):
         
         # Build corrected segment table (ensure every segment has a record)
         for seg in asr_segments:
-            is_filler = seg.id in filler_ids
             existing = corrected_segments.get(seg.id)
             if existing is None:
                 corrected_segments[seg.id] = ASRCorrectedSegment(
                     id=seg.id,
                     asr_segment_id=seg.id,
                     text=seg.text,
-                    corrections=[],
-                    is_filler=is_filler,
                 )
-            else:
-                existing.is_filler = is_filler
-                if not existing.text:
-                    existing.text = seg.text
+            elif not existing.text:
+                existing.text = seg.text
 
         context["asr_segments"] = asr_segments
         context["asr_segments_index"] = {seg.id: seg for seg in asr_segments}
         context["asr_corrected_segments"] = corrected_segments
         context["full_transcript"] = " ".join(
-            seg.text for seg in asr_segments if seg.text and seg.id not in filler_ids
+            seg.text for seg in asr_segments if seg.text
         )
         context["semantic_chunks"] = all_chunks
         logger.info(
-            "llm_semantic_chunking done (chunks=%d, fillers=%d)",
+            "llm_semantic_chunking done (chunks=%d)",
             len(all_chunks),
-            len(filler_ids),
         )
         return context

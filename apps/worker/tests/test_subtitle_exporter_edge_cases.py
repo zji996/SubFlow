@@ -21,15 +21,15 @@ def test_exporter_handles_empty_chunks_by_falling_back_to_asr_segments() -> None
     assert "World" in out
 
 
-def test_exporter_emits_filler_only_segments_when_marked_filler() -> None:
+def test_exporter_prefers_corrected_text_for_secondary() -> None:
     exporter = SubtitleExporter()
     asr_segments = [
-        ASRSegment(id=0, start=0.0, end=1.0, text="um"),
-        ASRSegment(id=1, start=1.0, end=2.0, text="uh"),
+        ASRSegment(id=0, start=0.0, end=1.0, text="Helo"),
+        ASRSegment(id=1, start=1.0, end=2.0, text="Wrold"),
     ]
     corrected = {
-        0: ASRCorrectedSegment(id=0, asr_segment_id=0, text="um", is_filler=True),
-        1: ASRCorrectedSegment(id=1, asr_segment_id=1, text="uh", is_filler=True),
+        0: ASRCorrectedSegment(id=0, asr_segment_id=0, text="Hello"),
+        1: ASRCorrectedSegment(id=1, asr_segment_id=1, text="World"),
     }
     out = exporter.export(
         chunks=[],
@@ -37,6 +37,7 @@ def test_exporter_emits_filler_only_segments_when_marked_filler() -> None:
         asr_corrected_segments=corrected,
         config=SubtitleExportConfig(format=SubtitleFormat.SRT, include_secondary=True),
     )
-    assert "um" in out
-    assert "uh" in out
-
+    assert "Hello" in out
+    assert "World" in out
+    assert "Helo" not in out
+    assert "Wrold" not in out

@@ -163,7 +163,7 @@ SubFlow 是一个基于语义理解的视频字幕翻译系统。与传统的逐
 - 可并行处理多个段落
 
 **输入 Artifact**: `vad_segments.json` + `vocals.wav`
-**输出 Artifact**: `asr_results.json` (带时间戳的文本列表) + `full_transcript.txt` (完整文本)
+**输出 Artifact**: `asr_segments.json` (带时间戳的文本列表) + `full_transcript.txt` (完整文本)
 
 ---
 
@@ -176,8 +176,8 @@ SubFlow 是一个基于语义理解的视频字幕翻译系统。与传统的逐
 
 Stage 4 的详细提示词、输入/输出 JSON、以及给 LLM 的实际输入（System Prompt + User Input）已拆到：`docs/llm_multi_pass.md`。
 
-**输入 Artifact**: `asr_results.json` + `full_transcript.txt`  
-**输出 Artifact**: `translation_result.json` (语义块 + 翻译 + 时间戳)
+**输入 Artifact**: `asr_segments.json` + `full_transcript.txt`  
+**输出 Artifact**: `global_context.json` + `asr_corrected_segments.json` + `semantic_chunks.json`
 
 ---
 
@@ -186,8 +186,7 @@ Stage 4 的详细提示词、输入/输出 JSON、以及给 LLM 的实际输入�
 **目标**：将翻译结果导出为标准字幕格式（默认双行字幕）。
 
 - 第一行（主字幕）：`SemanticChunk.translation`
-- 第二行（子字幕）：按 `SemanticChunk.asr_segment_ids` 合并的 `ASRCorrectedSegment.text`
-- 语气词段落（`ASRCorrectedSegment.is_filler=True`）：不翻译，只输出一行原文
+- 第二行（子字幕）：每个 `ASRSegment` 对应的 `ASRCorrectedSegment.text`（若无纠错则回退到 `ASRSegment.text`）
 
 ```
 ┌────────────┐     ┌────────────┐     ┌───────────────┐
@@ -204,7 +203,7 @@ Stage 4 的详细提示词、输入/输出 JSON、以及给 LLM 的实际输入�
 | **ASS** | 高级样式，动画效果 |
 | **JSON** | 程序化处理，自定义渲染 |
 
-**输入 Artifact**: `translation_result.json`
+**输入 Artifact**: `semantic_chunks.json` + `asr_segments.json` (+ `asr_corrected_segments.json` 可选)
 **输出 Artifact**: 字幕文件 (`.srt`, `.vtt`, `.ass` 等)
 
 ---
@@ -237,7 +236,7 @@ Artifact
 | `ASR_RESULTS` | 带时间戳的识别文本 | Stage 3 |
 | `FULL_TRANSCRIPT` | 完整转录文本 | Stage 3 |
 | `GLOBAL_CONTEXT` | 全局理解结果 | Stage 4.1 |
-| `ASR_CORRECTED_SEGMENTS` | ASR 纠错/语气词标记结果 | Stage 4.2 |
+| `ASR_CORRECTED_SEGMENTS` | ASR 纠错段落文本（可选） | Stage 4.2 |
 | `SEMANTIC_CHUNKS` | 语义块切分结果（包含翻译） | Stage 4.2 |
 | `SUBTITLE_FILE` | 最终字幕文件 | Stage 5 |
 

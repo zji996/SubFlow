@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import cast
 
 from subflow.config import Settings
 from subflow.models.segment import VADSegment
@@ -16,7 +17,7 @@ logger = logging.getLogger(__name__)
 class VADStage(Stage):
     name = "vad"
 
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.provider_name = "nemo"
         self.provider = NemoMarbleNetVADProvider(
@@ -40,7 +41,7 @@ class VADStage(Stage):
         # NeMo is the only supported VAD backend now; errors should be explicit.
         logger.info("vad start (audio_path=%s)", audio_path)
         timestamps = self.provider.detect(audio_path)
-        context = dict(context)
+        context = cast(PipelineContext, dict(context))
         context["vad_segments"] = [VADSegment(start=s, end=e) for s, e in timestamps]
         regions = getattr(self.provider, "last_regions", None)
         if isinstance(regions, list) and regions:

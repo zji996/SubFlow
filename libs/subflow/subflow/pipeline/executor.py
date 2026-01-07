@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 from subflow.pipeline.context import PipelineContext
 from subflow.stages.base import Stage
 from subflow.exceptions import StageExecutionError
@@ -10,12 +12,12 @@ from subflow.exceptions import StageExecutionError
 class PipelineExecutor:
     """流水线执行器"""
 
-    def __init__(self, stages: list[Stage]):
+    def __init__(self, stages: list[Stage]) -> None:
         self.stages = stages
 
     async def run(self, initial_context: PipelineContext) -> PipelineContext:
         """顺序执行所有阶段"""
-        context: PipelineContext = dict(initial_context)
+        context: PipelineContext = cast(PipelineContext, dict(initial_context))
         for stage in self.stages:
             if not stage.validate_input(context):
                 raise StageExecutionError(stage.name, "input validation failed")

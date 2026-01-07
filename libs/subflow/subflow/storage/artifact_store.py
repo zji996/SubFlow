@@ -38,7 +38,7 @@ class ArtifactStore(ABC):
 class LocalArtifactStore(ArtifactStore):
     """Local filesystem artifact store for development."""
 
-    def __init__(self, base_dir: str):
+    def __init__(self, base_dir: str) -> None:
         self.base_dir = Path(base_dir)
 
     def _path(self, project_id: str, stage: str, name: str) -> Path:

@@ -27,7 +27,7 @@ class GLMASRProvider(ASRProvider):
         api_key: str = "abc123",
         max_concurrent: int = 20,
         timeout: float = 300.0,
-    ):
+    ) -> None:
         """Initialize GLM-ASR provider.
 
         Args:
@@ -163,5 +163,10 @@ class GLMASRProvider(ASRProvider):
     async def __aenter__(self) -> "GLMASRProvider":
         return self
 
-    async def __aexit__(self, *args) -> None:
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: object | None,
+    ) -> None:
         await self.close()

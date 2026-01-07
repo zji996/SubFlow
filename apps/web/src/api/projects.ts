@@ -21,6 +21,12 @@ export interface CreateProjectRequest {
     target_language: string
 }
 
+export interface SubtitlePreview {
+    format: 'srt'
+    source: 'local' | 's3'
+    content: string
+}
+
 const API_BASE = ''
 
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
@@ -69,3 +75,6 @@ export async function runAll(id: string): Promise<Project> {
     })
 }
 
+export async function getSubtitles(id: string): Promise<SubtitlePreview> {
+    return request<SubtitlePreview>(`/projects/${id}/subtitles`)
+}

@@ -4274,6 +4274,9 @@ requires-dist = [
     { name = "tenacity", specifier = ">=8.0" },
 ]
 
+[package.metadata.requires-dev]
+dev = [{ name = "mypy", specifier = ">=1.8" }]
+
 [[package]]
 name = "subflow-worker"
 version = "0.1.0"
