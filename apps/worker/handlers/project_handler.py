@@ -85,6 +85,7 @@ async def process_project_task(task: dict[str, Any], redis: Redis, settings: Set
                 StageName.AUDIO_PREPROCESS,
                 StageName.VAD,
                 StageName.ASR,
+                StageName.LLM_ASR_CORRECTION,
                 StageName.LLM,
                 StageName.EXPORT,
             ]

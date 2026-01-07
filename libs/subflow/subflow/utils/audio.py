@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 
 from subflow.utils.ffmpeg import resolve_ffmpeg_bin
+from subflow.utils.subprocess import run_subprocess
 
 
 async def cut_audio_segment(
@@ -41,14 +42,13 @@ async def cut_audio_segment(
         "wav",
         str(output),
     ]
-    proc = await asyncio.create_subprocess_exec(
-        *cmd,
-        stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.DEVNULL,
-    )
-    rc = await proc.wait()
-    if rc != 0:
-        raise RuntimeError(f"ffmpeg cut failed (code={rc}): {' '.join(cmd)}")
+    result = await run_subprocess(cmd, capture_output=True)
+    if result.returncode != 0:
+        raise RuntimeError(
+            "ffmpeg cut failed "
+            f"(code={result.returncode}): {' '.join(cmd)}\n"
+            f"stderr: {result.stderr.decode(errors='ignore')}"
+        )
 
 
 async def cut_audio_segments_batch(

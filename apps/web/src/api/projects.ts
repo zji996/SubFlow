@@ -1,6 +1,6 @@
 export type ProjectStatus = 'pending' | 'processing' | 'paused' | 'completed' | 'failed'
 
-export type StageName = 'audio_preprocess' | 'vad' | 'asr' | 'llm' | 'export'
+export type StageName = 'audio_preprocess' | 'vad' | 'asr' | 'llm_asr_correction' | 'llm' | 'export'
 
 export interface Project {
     id: string

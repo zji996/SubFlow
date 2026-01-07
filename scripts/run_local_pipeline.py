@@ -48,7 +48,7 @@ async def _run() -> int:
     if args.skip_demucs:
         settings.audio.skip_demucs = True
     if args.max_asr_segments is not None:
-        settings.llm.max_asr_segments = int(args.max_asr_segments)
+        settings.llm_limits.max_asr_segments = int(args.max_asr_segments)
     if args.vad_device is not None:
         settings.vad.nemo_device = str(args.vad_device)
 

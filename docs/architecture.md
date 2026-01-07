@@ -71,11 +71,11 @@ SubFlow 是一个基于语义理解的视频字幕翻译系统。与传统的逐
 │       ┌────────────────────────────┼────────────────────────────┐      │
 │       │                            │                            │      │
 │       ▼                            ▼                            ▼      │
-│  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌─────────┐      │
-│  │ Stage 1 │─▶│ Stage 2 │─▶│ Stage 3 │─▶│ Stage 4 │─▶│ Stage 5 │      │
-│  │Audio    │  │VAD      │  │ASR      │  │LLM      │  │Export   │      │
-│  │Process  │  │Segment  │  │Transcr. │  │Process  │  │Format   │      │
-│  └─────────┘  └─────────┘  └─────────┘  └─────────┘  └─────────┘      │
+│  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌──────────────┐  ┌─────────┐  ┌─────────┐
+│  │ Stage 1 │─▶│ Stage 2 │─▶│ Stage 3 │─▶│   Stage 4    │─▶│ Stage 5 │─▶│ Stage 6 │
+│  │Audio    │  │VAD      │  │ASR      │  │LLM ASR Corr. │  │LLM      │  │Export   │
+│  │Process  │  │Segment  │  │Transcr. │  │(3.5)         │  │Translate│  │Format   │
+│  └─────────┘  └─────────┘  └─────────┘  └──────────────┘  └─────────┘  └─────────┘
 │       │            │            │            │            │            │
 │       ▼            ▼            ▼            ▼            ▼            │
 │  ┌─────────────────────────────────────────────────────────────────┐   │
@@ -132,7 +132,7 @@ SubFlow 是一个基于语义理解的视频字幕翻译系统。与传统的逐
 
 ```
 ┌────────────┐     ┌────────────┐     ┌────────────┐
-│ vocals.wav │────▶│ Silero-VAD │────▶│  Segments  │
+│ vocals.wav │────▶│ NeMo VAD   │────▶│  Segments  │
 │            │     │            │     │  列表      │
 └────────────┘     └────────────┘     └────────────┘
 ```
@@ -142,7 +142,9 @@ SubFlow 是一个基于语义理解的视频字幕翻译系统。与传统的逐
 - 生成的是"候选切分点"，不是最终字幕边界
 
 **输入 Artifact**: `vocals.wav`
-**输出 Artifact**: `vad_segments.json` (时间戳列表)
+**输出 Artifact**:
+- `vad_segments.json` (细分片段时间戳列表)
+- `vad_regions.json` (非连续语音区域列表，可选)
 
 ---
 
@@ -158,30 +160,43 @@ SubFlow 是一个基于语义理解的视频字幕翻译系统。与传统的逐
 ```
 
 **关键决策**：
-- 分段识别策略：每个 VAD 段独立送入 ASR
+- 分段识别策略：每个 VAD segment 独立送入 ASR（时间戳继承自 VAD）
+- 合并识别策略：在每个 VAD region 内将 segments 合并为 ≤30s 的识别块，再做整体 ASR（上下文更完整）
 - 时间戳由 VAD 段边界继承，ASR 仅负责文本输出
 - 可并行处理多个段落
 
 **输入 Artifact**: `vad_segments.json` + `vocals.wav`
-**输出 Artifact**: `asr_segments.json` (带时间戳的文本列表) + `full_transcript.txt` (完整文本)
+**输出 Artifact**:
+- `asr_segments.json` (分段 ASR，带时间戳的文本列表)
+- `asr_merged_chunks.json` (region 内合并识别块列表，含 `segment_ids` 与整体识别 `text`)
+- `full_transcript.txt` (基于分段 ASR 的完整文本)
 
 ---
 
-### Stage 4: LLM 多 Pass 处理 (Multi-Pass LLM Processing)
+### Stage 4: LLM ASR 纠错 (LLM ASR Correction)
 
-**目标**：通过 2 轮 LLM 处理，完成全局理解、语义块切分、纠错与翻译。
+**目标**：对比 “region 内合并识别” 与 “分段识别”，纠正分段 ASR 的听错字、漏字、多字，并删除明显幻觉。
+
+**输入 Artifact**: `asr_segments.json` + `asr_merged_chunks.json`  
+**输出 Artifact**: `asr_corrected_segments.json`
+
+---
+
+### Stage 5: LLM 多 Pass 翻译 (Multi-Pass LLM Translation)
+
+**目标**：通过 2 轮 LLM 处理，完成全局理解、语义块切分与翻译（ASR 纠错已在 Stage 4 完成）。
 
 - Pass 1（全局理解）：生成 `global_context`（主题/领域/风格/术语表/翻译注意事项）
-- Pass 2（语义切分+纠错+翻译）：从 `asr_segments` 生成 `asr_corrected_segments` 与 `semantic_chunks`（包含 `translation`），并将纠错结果回写到 `asr_segments`
+- Pass 2（语义切分+翻译）：从（已纠错的）`asr_segments` 生成 `semantic_chunks`（包含 `translation`）
 
-Stage 4 的详细提示词、输入/输出 JSON、以及给 LLM 的实际输入（System Prompt + User Input）已拆到：`docs/llm_multi_pass.md`。
+Stage 5 的详细提示词、输入/输出 JSON、以及给 LLM 的实际输入（System Prompt + User Input）已拆到：`docs/llm_multi_pass.md`。
 
 **输入 Artifact**: `asr_segments.json` + `full_transcript.txt`  
-**输出 Artifact**: `global_context.json` + `asr_corrected_segments.json` + `semantic_chunks.json`
+**输出 Artifact**: `global_context.json` + `semantic_chunks.json`
 
 ---
 
-### Stage 5: 字幕输出 (Subtitle Export)
+### Stage 6: 字幕输出 (Subtitle Export)
 
 **目标**：将翻译结果导出为标准字幕格式（默认双行字幕）。
 
@@ -233,12 +248,14 @@ Artifact
 | `VIDEO_INPUT` | 原始视频文件路径 | 输入 |
 | `VOCALS_AUDIO` | 提取的人声音频 | Stage 1 |
 | `VAD_SEGMENTS` | 语音活动时间段列表 | Stage 2 |
+| `VAD_REGIONS` | 非连续语音区域列表（可选） | Stage 2 |
 | `ASR_RESULTS` | 带时间戳的识别文本 | Stage 3 |
+| `ASR_MERGED_CHUNKS` | region 内合并识别块列表 | Stage 3 |
 | `FULL_TRANSCRIPT` | 完整转录文本 | Stage 3 |
-| `GLOBAL_CONTEXT` | 全局理解结果 | Stage 4.1 |
-| `ASR_CORRECTED_SEGMENTS` | ASR 纠错段落文本（可选） | Stage 4.2 |
-| `SEMANTIC_CHUNKS` | 语义块切分结果（包含翻译） | Stage 4.2 |
-| `SUBTITLE_FILE` | 最终字幕文件 | Stage 5 |
+| `ASR_CORRECTED_SEGMENTS` | ASR 纠错段落文本 | Stage 4 |
+| `GLOBAL_CONTEXT` | 全局理解结果 | Stage 5.1 |
+| `SEMANTIC_CHUNKS` | 语义块切分结果（包含翻译） | Stage 5.2 |
+| `SUBTITLE_FILE` | 最终字幕文件 | Stage 6 |
 
 ---
 

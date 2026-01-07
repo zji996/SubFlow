@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import cast
 
 from subflow.config import Settings
+from subflow.exceptions import StageExecutionError
 from subflow.models.segment import VADSegment
 from subflow.pipeline.context import PipelineContext
 from subflow.providers.vad import NemoMarbleNetVADProvider
@@ -40,7 +42,17 @@ class VADStage(Stage):
         audio_path = str(context["vocals_audio_path"])
         # NeMo is the only supported VAD backend now; errors should be explicit.
         logger.info("vad start (audio_path=%s)", audio_path)
-        timestamps = self.provider.detect(audio_path)
+        try:
+            timestamps = self.provider.detect(audio_path)
+        except Exception as exc:
+            model_path = Path(self.settings.vad.nemo_model_path)
+            hint = (
+                f"VAD failed (provider={self.provider_name}). "
+                f"model_path={model_path} exists={model_path.exists()}. "
+                "If missing, set `VAD_NEMO_MODEL_PATH` or download the NeMo `.nemo` checkpoint. "
+                "If import fails, ensure `nemo_toolkit` and `torchaudio` are installed in worker env."
+            )
+            raise StageExecutionError(self.name, hint) from exc
         context = cast(PipelineContext, dict(context))
         context["vad_segments"] = [VADSegment(start=s, end=e) for s, e in timestamps]
         regions = getattr(self.provider, "last_regions", None)

@@ -109,8 +109,9 @@ async def run_project(request: Request, project_id: str, payload: RunStageReques
             1: StageName.AUDIO_PREPROCESS,
             2: StageName.VAD,
             3: StageName.ASR,
-            4: StageName.LLM,
-            5: StageName.EXPORT,
+            4: StageName.LLM_ASR_CORRECTION,
+            5: StageName.LLM,
+            6: StageName.EXPORT,
         }.get(next_stage)
         if stage is None:
             raise HTTPException(status_code=409, detail="project already completed")

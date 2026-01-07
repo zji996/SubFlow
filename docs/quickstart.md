@@ -1,6 +1,6 @@
 # Quickstart (本地开发)
 
-> 说明：本项目 Python 部分统一用 `uv`；本节只说明一键启动，不展开 Docker/服务依赖细节。
+> 说明：本项目 Python 部分统一用 `uv`；本节覆盖从启动到跑通 6 阶段 pipeline（含字幕预览）。
 
 ## 前置条件
 
@@ -9,6 +9,27 @@
 - 依赖服务（Redis / MinIO / Postgres 等）请自行用 Docker 启动（例如 `docker-compose -f docker-compose.dev.yml up -d`；也可使用 `infra/docker-compose.dev.yml`）
 - 如果你用 Docker 在 `./data/` 下跑了 Postgres/MinIO，`data/` 可能会被 root 占用；建议为 SubFlow 单独建一个可写目录并在 `.env` 里设置 `DATA_DIR=./data/subflow`
 - Worker 依赖 `demucs/torch/nemo`（需要 GPU 的工作都在 worker），建议使用 Python 3.11：`uv python install 3.11`
+
+## 环境变量（最小）
+
+建议在仓库根目录放一个本地 `.env`（不要提交）：
+
+- `ASR_BASE_URL`：GLM-ASR 服务地址（默认 `http://localhost:8000/v1`）
+- `ASR_API_KEY`：GLM-ASR Key（如果你的 ASR 服务需要）
+- `LLM_FAST_*` / `LLM_POWER_*`：Stage 4/5 需要的 fast/power 两套 LLM 配置（见 `.env.example`）
+- `VAD_NEMO_MODEL_PATH`：NeMo VAD 模型 `.nemo` 文件路径（默认会指向仓库根目录的 `models/.../*.nemo`）
+
+可选（并发/路由，见 `.env.example`）：
+
+- `LLM_ASR_CORRECTION` / `LLM_GLOBAL_UNDERSTANDING` / `LLM_SEMANTIC_TRANSLATION`：各阶段选择 `fast/power`
+- `CONCURRENCY_ASR` / `CONCURRENCY_LLM_CORRECTION`：ASR 与纠错并发数
+
+快速确认 worker 侧能找到 VAD 模型：
+
+```bash
+uv run --project apps/worker --directory apps/worker \
+  python -c "from subflow.config import Settings; from pathlib import Path; s=Settings(); p=Path(s.vad.nemo_model_path); print(p); print('exists=', p.exists())"
+```
 
 ## 一键启动（推荐）
 
@@ -28,6 +49,17 @@ bash scripts/manager.sh up
 - 日志：`logs/api.log`、`logs/worker.log`、`logs/web.log`
 - PID：`logs/api.pid`、`logs/worker.pid`、`logs/web.pid`
 
+## 6 阶段 Pipeline（概览）
+
+Stage 顺序与名称：
+
+1. `audio_preprocess`：抽音频 + 人声分离（Demucs）
+2. `vad`：NeMo VAD 产出 `vad_segments.json` / `vad_regions.json`
+3. `asr`：分段 ASR + 合并块 ASR（产出 `asr_segments.json` / `asr_merged_chunks.json`）
+4. `llm_asr_correction`：用合并块 ASR 纠错分段 ASR（产出 `asr_corrected_segments.json`）
+5. `llm`：全局理解 + 语义切分+翻译（产出 `global_context.json` / `semantic_chunks.json`）
+6. `export`：导出字幕（`subtitles.srt`，双行字幕）
+
 ## 常用命令
 
 ```bash
@@ -44,7 +76,9 @@ bash scripts/manager.sh up api
 bash scripts/manager.sh up --api-port 8100 --web-port 5173
 ```
 
-## 提交任务（可选）
+## 跑通一次（API 方式）
+
+### 1) 创建项目
 
 ```bash
 curl -X POST "http://localhost:8100/projects" \
@@ -56,3 +90,61 @@ curl -X POST "http://localhost:8100/projects" \
     "language": "en"
   }'
 ```
+
+### 2) 执行全部阶段
+
+将上一步返回的 `id` 替换进去：
+
+```bash
+curl -X POST "http://localhost:8100/projects/<project_id>/run-all" \
+  -H "Content-Type: application/json" \
+  -d '{}'
+```
+
+### 3) 查看进度
+
+```bash
+curl "http://localhost:8100/projects/<project_id>"
+```
+
+### 4) 预览字幕
+
+```bash
+curl "http://localhost:8100/projects/<project_id>/subtitles"
+```
+
+### 5) 查看本地 artifacts（可选）
+
+本地开发默认使用 `LocalArtifactStore`，产物落在 `DATA_DIR/projects/<project_id>/...`（默认 `./data/projects/...`）：
+
+```bash
+ls -R ./data/projects/<project_id> | head
+```
+
+常见文件：
+
+- `audio_preprocess/`：`vocals.wav` 等
+- `vad/`：`vad_segments.json`、`vad_regions.json`
+- `asr/`：`asr_segments.json`、`asr_merged_chunks.json`、`full_transcript.txt`
+- `llm_asr_correction/`：`asr_corrected_segments.json`
+- `llm/`：`global_context.json`、`semantic_chunks.json`
+- `export/`：`subtitles.srt`
+
+## 跑通一次（Web UI 方式）
+
+- 打开 `http://localhost:5173`
+- 新建项目后点击“执行全部”
+- 等待完成后在项目详情页点击“预览字幕”
+
+## Troubleshooting
+
+### VAD 模型不可用
+
+先确认 worker 侧能找到 `.nemo`：
+
+```bash
+uv run --project apps/worker --directory apps/worker \
+  python -c "from subflow.config import Settings; from pathlib import Path; s=Settings(); p=Path(s.vad.nemo_model_path); print(p); print('exists=', p.exists())"
+```
+
+如果 `exists=False`，在 `.env` 里显式设置 `VAD_NEMO_MODEL_PATH`（参考 `.env.example`）。

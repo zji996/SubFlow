@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
+
+from subflow.utils.subprocess import run_subprocess
 
 
 class DemucsProvider:
@@ -17,8 +18,8 @@ class DemucsProvider:
         output_dir = str(output_dir)
         Path(output_dir).mkdir(parents=True, exist_ok=True)
 
-        try:
-            process = await asyncio.create_subprocess_exec(
+        result = await run_subprocess(
+            [
                 self.demucs_bin,
                 "--two-stems=vocals",
                 "-n",
@@ -26,23 +27,16 @@ class DemucsProvider:
                 audio_path,
                 "-o",
                 output_dir,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-        except FileNotFoundError as exc:
-            raise RuntimeError(
-                f"demucs binary not found: {self.demucs_bin}. "
-                "Install demucs in the worker env (e.g. `uv add --project apps/worker demucs`) "
-                "or set AUDIO_DEMUCS_BIN."
-            ) from exc
-        stdout, stderr = await process.communicate()
-        if process.returncode != 0:
+            ],
+            capture_output=True,
+        )
+        if result.returncode != 0:
             raise RuntimeError(
                 "demucs failed "
-                f"(code={process.returncode}).\n"
+                f"(code={result.returncode}).\n"
                 f"cmd: {self.demucs_bin} --two-stems=vocals -n {self.model} {audio_path} -o {output_dir}\n"
-                f"stdout: {stdout.decode(errors='ignore')}\n"
-                f"stderr: {stderr.decode(errors='ignore')}"
+                f"stdout: {result.stdout.decode(errors='ignore')}\n"
+                f"stderr: {result.stderr.decode(errors='ignore')}"
             )
 
         vocals_path = Path(output_dir) / self.model / Path(audio_path).stem / "vocals.wav"

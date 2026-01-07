@@ -9,6 +9,7 @@ from subflow.stages import (
     AudioPreprocessStage,
     ExportStage,
     GlobalUnderstandingPass,
+    LLMASRCorrectionStage,
     SemanticChunkingPass,
     VADStage,
 )
@@ -20,6 +21,7 @@ def create_translation_pipeline(config: Settings) -> PipelineExecutor:
         AudioPreprocessStage(config),
         VADStage(config),
         ASRStage(config),
+        LLMASRCorrectionStage(config),
         GlobalUnderstandingPass(config),
         SemanticChunkingPass(config),
         ExportStage(config, format="srt"),

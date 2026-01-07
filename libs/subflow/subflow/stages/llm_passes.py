@@ -8,7 +8,7 @@ from typing import Any, cast
 
 from subflow.config import Settings
 from subflow.exceptions import StageExecutionError
-from subflow.models.segment import ASRCorrectedSegment, ASRSegment, SemanticChunk
+from subflow.models.segment import ASRSegment, SemanticChunk
 from subflow.pipeline.context import PipelineContext
 from subflow.providers import get_llm_provider
 from subflow.providers.llm import Message
@@ -42,7 +42,10 @@ class GlobalUnderstandingPass(Stage):
     
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self.llm = get_llm_provider(settings.llm.model_dump())
+        self.profile = str(getattr(settings, "llm_stage").global_understanding or "fast")
+        self.llm_cfg = settings.llm_config_for(self.profile)
+        self.llm = get_llm_provider(self.llm_cfg)
+        self.api_key = str(self.llm_cfg.get("api_key") or "")
         self.json_helper = LLMJSONHelper(self.llm, max_retries=3)
 
     async def close(self) -> None:
@@ -73,8 +76,8 @@ class GlobalUnderstandingPass(Stage):
         transcript = str(context.get("full_transcript", "")).strip()
 
         # Fallback if no API key
-        if not self.settings.llm.api_key:
-            logger.info("llm_global_understanding fallback (no api key)")
+        if not self.api_key:
+            logger.info("llm_global_understanding fallback (no api key, profile=%s)", self.profile)
             context["global_context"] = {
                 "topic": "unknown",
                 "domain": "unknown",
@@ -92,9 +95,10 @@ class GlobalUnderstandingPass(Stage):
             strategy="sample",
         )
         logger.info(
-            "llm_global_understanding start (tokens=%d->%d)",
+            "llm_global_understanding start (tokens=%d->%d, profile=%s)",
             raw_tokens,
             count_tokens(transcript),
+            self.profile,
         )
 
         system_prompt = self._get_system_prompt()
@@ -113,7 +117,7 @@ class GlobalUnderstandingPass(Stage):
 
 
 class SemanticChunkingPass(Stage):
-    """Pass 2: Greedy sequential semantic chunking + correction + translation."""
+    """Pass 2: Greedy sequential semantic chunking + translation."""
     
     name = "llm_semantic_chunking"
     
@@ -123,7 +127,10 @@ class SemanticChunkingPass(Stage):
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self.llm = get_llm_provider(settings.llm.model_dump())
+        self.profile = str(getattr(settings, "llm_stage").semantic_translation or "fast")
+        self.llm_cfg = settings.llm_config_for(self.profile)
+        self.llm = get_llm_provider(self.llm_cfg)
+        self.api_key = str(self.llm_cfg.get("api_key") or "")
         self.json_helper = LLMJSONHelper(self.llm, max_retries=3)
 
     async def close(self) -> None:
@@ -198,33 +205,9 @@ class SemanticChunkingPass(Stage):
         window_start: int,
         window_segments: list[ASRSegment],
         chunk_id: int,
-    ) -> tuple[dict[int, ASRCorrectedSegment], SemanticChunk | None, int]:
+    ) -> tuple[SemanticChunk | None, int]:
         window_len = len(window_segments)
         window_by_abs_id = {window_start + i: seg for i, seg in enumerate(window_segments)}
-
-        corrected_map: dict[int, ASRCorrectedSegment] = {}
-        for item in list(result.get("corrected_segments", []) or []):
-            if not isinstance(item, dict):
-                continue
-            raw_id = item.get("asr_segment_id")
-            if raw_id is None:
-                continue
-            abs_ids = self._to_absolute_ids(
-                [int(raw_id)], window_start=window_start, window_len=window_len
-            )
-            if not abs_ids:
-                continue
-            abs_id = abs_ids[0]
-
-            corrected_text = str(item.get("text", "")).strip()
-            if not corrected_text:
-                corrected_text = str(getattr(window_by_abs_id.get(abs_id), "text", "") or "").strip()
-
-            corrected_map[abs_id] = ASRCorrectedSegment(
-                id=abs_id,
-                asr_segment_id=abs_id,
-                text=corrected_text,
-            )
 
         # Parse chunk from top-level fields (simplified format)
         raw_ids = result.get("asr_segment_ids", [])
@@ -246,13 +229,11 @@ class SemanticChunkingPass(Stage):
         
         chunk: SemanticChunk | None = None
         if asr_segment_ids and translation:
-            # Build text from corrected segments or original
-            text_parts = []
+            text_parts: list[str] = []
             for seg_id in asr_segment_ids:
-                if seg_id in corrected_map:
-                    text_parts.append(corrected_map[seg_id].text)
-                elif seg_id in window_by_abs_id:
-                    text_parts.append(window_by_abs_id[seg_id].text)
+                seg = window_by_abs_id.get(seg_id)
+                if seg is not None:
+                    text_parts.append(str(seg.text or "").strip())
             text = " ".join(text_parts)
             
             chunk = SemanticChunk(
@@ -269,7 +250,7 @@ class SemanticChunkingPass(Stage):
             # No chunk, force advance by window size to avoid infinite loop
             next_cursor = window_start + len(window_segments)
 
-        return corrected_map, chunk, next_cursor
+        return chunk, next_cursor
 
     async def execute(self, context: PipelineContext) -> PipelineContext:
         context = cast(PipelineContext, dict(context))
@@ -277,8 +258,8 @@ class SemanticChunkingPass(Stage):
         target_language = str(context.get("target_language", "zh"))
         
         # Fallback if no API key
-        if not self.settings.llm.api_key:
-            logger.info("llm_semantic_chunking fallback (no api key)")
+        if not self.api_key:
+            logger.info("llm_semantic_chunking fallback (no api key, profile=%s)", self.profile)
             context["semantic_chunks"] = [
                 SemanticChunk(
                     id=segment.id,
@@ -290,14 +271,6 @@ class SemanticChunkingPass(Stage):
                 if (segment.text or "").strip()
             ]
             context["asr_segments_index"] = {seg.id: seg for seg in asr_segments}
-            context["asr_corrected_segments"] = {
-                seg.id: ASRCorrectedSegment(
-                    id=seg.id,
-                    asr_segment_id=seg.id,
-                    text=seg.text,
-                )
-                for seg in asr_segments
-            }
             return context
 
         # Greedy sequential processing
@@ -306,9 +279,6 @@ class SemanticChunkingPass(Stage):
         cursor = 0
         chunk_id = 0
         input_context = _compact_global_context(context.get("global_context"))
-        corrected_segments: dict[int, ASRCorrectedSegment] = dict(
-            context.get("asr_corrected_segments", {}) or {}
-        )
         
         while cursor < len(asr_segments):
             prev_cursor = cursor
@@ -346,19 +316,12 @@ class SemanticChunkingPass(Stage):
             if not isinstance(result, dict):
                 raise StageExecutionError(self.name, "Semantic chunking output must be a JSON object")
 
-            new_corrected, new_chunk, next_cursor = self._parse_result(
+            new_chunk, next_cursor = self._parse_result(
                 result,
                 window_start=cursor,
                 window_segments=window,
                 chunk_id=chunk_id,
             )
-
-            corrected_segments.update(new_corrected)
-
-            # Apply corrected segment text back to ASR segments
-            for seg_id, corrected in new_corrected.items():
-                if 0 <= seg_id < len(asr_segments) and corrected.text:
-                    asr_segments[seg_id].text = corrected.text
             
             if new_chunk is None:
                 # No chunks extracted (all fillers?), force advance
@@ -372,21 +335,8 @@ class SemanticChunkingPass(Stage):
             if cursor <= prev_cursor:
                 cursor = prev_cursor + 1
         
-        # Build corrected segment table (ensure every segment has a record)
-        for seg in asr_segments:
-            existing = corrected_segments.get(seg.id)
-            if existing is None:
-                corrected_segments[seg.id] = ASRCorrectedSegment(
-                    id=seg.id,
-                    asr_segment_id=seg.id,
-                    text=seg.text,
-                )
-            elif not existing.text:
-                existing.text = seg.text
-
         context["asr_segments"] = asr_segments
         context["asr_segments_index"] = {seg.id: seg for seg in asr_segments}
-        context["asr_corrected_segments"] = corrected_segments
         context["full_transcript"] = " ".join(
             seg.text for seg in asr_segments if seg.text
         )

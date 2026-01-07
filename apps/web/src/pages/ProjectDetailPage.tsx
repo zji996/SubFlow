@@ -9,8 +9,9 @@ const stageOrder: { index: number; name: StageName; label: string }[] = [
     { index: 1, name: 'audio_preprocess', label: '音频处理' },
     { index: 2, name: 'vad', label: 'VAD 切分' },
     { index: 3, name: 'asr', label: 'ASR 识别' },
-    { index: 4, name: 'llm', label: 'LLM 处理' },
-    { index: 5, name: 'export', label: '导出字幕' },
+    { index: 4, name: 'llm_asr_correction', label: 'LLM ASR 纠错' },
+    { index: 5, name: 'llm', label: 'LLM 翻译' },
+    { index: 6, name: 'export', label: '导出字幕' },
 ]
 
 function nextStage(currentStage: number): StageName | null {

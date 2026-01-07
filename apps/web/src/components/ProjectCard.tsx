@@ -28,10 +28,9 @@ export function ProjectCard({ project }: ProjectCardProps) {
             </div>
 
             <div className="mt-4 flex items-center justify-between text-xs text-[--color-text-muted]">
-                <span>Stage: {project.current_stage}/5</span>
+                <span>Stage: {project.current_stage}/6</span>
                 <span>{project.target_language}</span>
             </div>
         </Link>
     )
 }
-

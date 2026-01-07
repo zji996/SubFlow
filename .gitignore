@@ -39,6 +39,9 @@ ENV/
 .uv/
 .uv-bootstrap/
 
+# Some libraries use XDG_CACHE_HOME; keep repo clean in local dev.
+.cache/
+
 # === IDE ===
 .idea/
 .vscode/

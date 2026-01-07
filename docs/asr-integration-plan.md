@@ -106,10 +106,10 @@ class ASRStage(Stage):
     def __init__(self, settings: Settings):
         self.settings = settings
         self.provider = GLMASRProvider(
-            base_url=settings.asr_base_url,
-            model=settings.asr_model,
-            api_key=settings.asr_api_key,
-            max_concurrent=settings.asr_max_concurrent,
+            base_url=settings.asr.base_url,
+            model=settings.asr.model,
+            api_key=settings.asr.api_key,
+            max_concurrent=settings.concurrency_asr,
         )
 
     async def execute(self, context: dict[str, Any]) -> dict[str, Any]:
@@ -154,7 +154,8 @@ class ASRStage(Stage):
 asr_base_url: str = "http://localhost:8000/v1"
 asr_model: str = "glm-asr"
 asr_api_key: str = "abc123"
-asr_max_concurrent: int = 20  # 并发数，建议设为 max-num-seqs 的 40%
+# 全局 ASR 并发数（通过 CONCURRENCY_ASR 控制）
+concurrency_asr: int = 10
 ```
 
 **文件**: `.env.example`
@@ -163,7 +164,7 @@ asr_max_concurrent: int = 20  # 并发数，建议设为 max-num-seqs 的 40%
 ASR_BASE_URL=http://localhost:8000/v1
 ASR_MODEL=glm-asr
 ASR_API_KEY=abc123
-ASR_MAX_CONCURRENT=20
+CONCURRENCY_ASR=10
 ```
 
 ---
@@ -226,7 +227,7 @@ async def cut_audio_segments_batch(
 
 ### 并发度设置
 
-| vLLM max-num-seqs | 建议 ASR_MAX_CONCURRENT | 说明 |
+| vLLM max-num-seqs | 建议 CONCURRENCY_ASR | 说明 |
 |-------------------|------------------------|------|
 | 50 | 20 | 留余量给其他请求 |
 | 100 | 40 | 高并发场景 |

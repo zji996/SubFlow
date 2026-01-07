@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
-import tempfile
 import logging
+import tempfile
 from pathlib import Path
 from typing import cast
 
 from subflow.config import Settings
-from subflow.models.segment import ASRSegment, VADSegment
+from subflow.models.segment import ASRMergedChunk, ASRSegment, VADSegment
 from subflow.pipeline.context import PipelineContext
 from subflow.providers.asr.glm_asr import GLMASRProvider
 from subflow.stages.base import Stage
 from subflow.utils.audio import cleanup_segment_files, cut_audio_segments_batch
+from subflow.utils.audio_chunk_merger import (
+    build_merged_chunk_specs,
+    cut_merged_chunk_audio,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -24,11 +28,12 @@ class ASRStage(Stage):
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
+        max_concurrent = max(1, int(settings.concurrency_asr))
         self.provider = GLMASRProvider(
             base_url=settings.asr.base_url,
             model=settings.asr.model,
             api_key=settings.asr.api_key or "abc123",
-            max_concurrent=settings.asr.max_concurrent,
+            max_concurrent=max_concurrent,
             timeout=settings.asr.timeout,
         )
 
@@ -51,7 +56,9 @@ class ASRStage(Stage):
         context = cast(PipelineContext, dict(context))
         vocals_path: str = context["vocals_audio_path"]
         vad_segments: list[VADSegment] = context["vad_segments"]
+        vad_regions: list[VADSegment] = list(context.get("vad_regions") or [])
         source_language = context.get("source_language") or None
+        max_concurrent = max(1, int(self.settings.concurrency_asr))
 
         if not vad_segments:
             logger.info("asr skipped (no vad_segments)")
@@ -59,9 +66,11 @@ class ASRStage(Stage):
             context["full_transcript"] = ""
             return context
 
-        # Create temp directory for audio segments
+        # Create temp directory for audio segments / merged chunks
         run_id = str(context.get("project_id") or context.get("job_id") or "unknown")
-        temp_dir = Path(tempfile.gettempdir()) / "subflow" / run_id / "asr_segments"
+        base_dir = Path(tempfile.gettempdir()) / "subflow" / run_id
+        segments_dir = base_dir / "asr_segments"
+        merged_dir = base_dir / "asr_merged_chunks"
 
         try:
             logger.info("asr start (segments=%d)", len(vad_segments))
@@ -70,13 +79,26 @@ class ASRStage(Stage):
             segment_paths = await cut_audio_segments_batch(
                 input_path=vocals_path,
                 segments=time_ranges,
-                output_dir=str(temp_dir),
+                output_dir=str(segments_dir),
                 max_concurrent=10,  # FFmpeg 并发数
                 ffmpeg_bin=self.settings.audio.ffmpeg_bin,
             )
 
             # 2. Transcribe all segments concurrently
-            texts = await self.provider.transcribe_batch(segment_paths, language=source_language)
+            import asyncio
+
+            semaphore = asyncio.Semaphore(max_concurrent)
+
+            async def _one(path: str) -> str:
+                async with semaphore:
+                    try:
+                        segs = await self.provider.transcribe(path, language=source_language)
+                        return segs[0].text if segs else ""
+                    except Exception as exc:
+                        logger.warning("asr error for %s: %s", path, exc)
+                        return ""
+
+            texts = list(await asyncio.gather(*[_one(p) for p in segment_paths]))
 
             # 3. Assemble results with timing
             asr_segments: list[ASRSegment] = []
@@ -97,14 +119,58 @@ class ASRStage(Stage):
             context["asr_segments"] = asr_segments
             context["full_transcript"] = full_transcript
             context["source_language"] = source_language
-            logger.info("asr done (asr_segments=%d)", len(asr_segments))
+
+            # 5. Region-merged ASR (<=30s chunks per region)
+            merged_specs = build_merged_chunk_specs(
+                vad_regions,
+                vad_segments,
+                max_chunk_s=30.0,
+            )
+            merged_chunks: list[ASRMergedChunk] = []
+            if merged_specs:
+                logger.info(
+                    "asr merged_chunks build (chunks=%d, total_audio_s=%.2f)",
+                    len(merged_specs),
+                    sum(float(x.duration_s) for x in merged_specs),
+                )
+                merged_paths = await cut_merged_chunk_audio(
+                    vocals_path,
+                    merged_specs,
+                    output_dir=str(merged_dir),
+                    ffmpeg_bin=self.settings.audio.ffmpeg_bin,
+                    max_concurrent=4,
+                )
+                merged_texts = list(await asyncio.gather(*[_one(p) for p in merged_paths]))
+                for spec, text in zip(merged_specs, merged_texts):
+                    merged_chunks.append(
+                        ASRMergedChunk(
+                            region_id=int(spec.region_id),
+                            chunk_id=int(spec.chunk_id),
+                            start=float(spec.start),
+                            end=float(spec.end),
+                            segment_ids=[int(x) for x in spec.segment_ids],
+                            text=str(text or "").strip(),
+                        )
+                    )
+            context["asr_merged_chunks"] = merged_chunks
+            logger.info(
+                "asr done (asr_segments=%d, merged_chunks=%d)",
+                len(asr_segments),
+                len(merged_chunks),
+            )
 
         finally:
-            # 5. Cleanup temporary segment files
-            if temp_dir.exists():
-                cleanup_segment_files([str(p) for p in temp_dir.glob("*.wav")])
+            # Cleanup temporary audio files
+            if segments_dir.exists():
+                cleanup_segment_files([str(p) for p in segments_dir.glob("*.wav")])
                 try:
-                    temp_dir.rmdir()
+                    segments_dir.rmdir()
+                except OSError:
+                    pass
+            if merged_dir.exists():
+                cleanup_segment_files([str(p) for p in merged_dir.glob("*.wav")])
+                try:
+                    merged_dir.rmdir()
                 except OSError:
                     pass
 

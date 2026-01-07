@@ -10,10 +10,12 @@ from subflow.config import Settings
 from subflow.exceptions import StageExecutionError
 from subflow.models.serializers import (
     deserialize_asr_corrected_segments,
+    deserialize_asr_merged_chunks,
     deserialize_asr_segments,
     deserialize_semantic_chunks,
     deserialize_vad_segments,
     serialize_asr_corrected_segments,
+    serialize_asr_merged_chunks,
     serialize_asr_segments,
     serialize_semantic_chunks,
     serialize_vad_segments,
@@ -27,6 +29,7 @@ from subflow.models.project import (
 )
 from subflow.models.segment import (
     ASRCorrectedSegment,
+    ASRMergedChunk,
     ASRSegment,
     SemanticChunk,
     VADSegment,
@@ -37,6 +40,7 @@ from subflow.stages import (
     AudioPreprocessStage,
     ExportStage,
     GlobalUnderstandingPass,
+    LLMASRCorrectionStage,
     SemanticChunkingPass,
     VADStage,
 )
@@ -49,6 +53,7 @@ _STAGE_ORDER: list[StageName] = [
     StageName.AUDIO_PREPROCESS,
     StageName.VAD,
     StageName.ASR,
+    StageName.LLM_ASR_CORRECTION,
     StageName.LLM,
     StageName.EXPORT,
 ]
@@ -122,6 +127,24 @@ class PipelineOrchestrator:
                 )
             except FileNotFoundError:
                 pass
+            try:
+                merged = await self.store.load_json(project.id, StageName.ASR.value, "asr_merged_chunks.json")
+                if isinstance(merged, list):
+                    ctx["asr_merged_chunks"] = deserialize_asr_merged_chunks(merged)
+            except FileNotFoundError:
+                pass
+
+        if project.current_stage >= _STAGE_INDEX[StageName.LLM_ASR_CORRECTION]:
+            try:
+                corrected = await self.store.load_json(
+                    project.id,
+                    StageName.LLM_ASR_CORRECTION.value,
+                    "asr_corrected_segments.json",
+                )
+                if isinstance(corrected, list):
+                    ctx["asr_corrected_segments"] = deserialize_asr_corrected_segments(corrected)
+            except FileNotFoundError:
+                pass
 
         if project.current_stage >= _STAGE_INDEX[StageName.LLM]:
             try:
@@ -131,11 +154,13 @@ class PipelineOrchestrator:
             except FileNotFoundError:
                 pass
             try:
-                corrected = await self.store.load_json(
-                    project.id, StageName.LLM.value, "asr_corrected_segments.json"
-                )
-                if isinstance(corrected, list):
-                    ctx["asr_corrected_segments"] = deserialize_asr_corrected_segments(corrected)
+                # Backward compatibility: legacy artifacts stored corrections under the LLM stage.
+                if "asr_corrected_segments" not in ctx:
+                    corrected = await self.store.load_json(
+                        project.id, StageName.LLM.value, "asr_corrected_segments.json"
+                    )
+                    if isinstance(corrected, list):
+                        ctx["asr_corrected_segments"] = deserialize_asr_corrected_segments(corrected)
             except FileNotFoundError:
                 pass
             try:
@@ -144,6 +169,16 @@ class PipelineOrchestrator:
                     ctx["semantic_chunks"] = deserialize_semantic_chunks(chunks)
             except FileNotFoundError:
                 pass
+
+        corrected_map: dict[int, ASRCorrectedSegment] = dict(ctx.get("asr_corrected_segments") or {})
+        if corrected_map and ctx.get("asr_segments"):
+            for seg in list(ctx.get("asr_segments") or []):
+                corrected = corrected_map.get(int(seg.id))
+                if corrected is not None:
+                    seg.text = str(corrected.text or "")
+            ctx["full_transcript"] = " ".join(
+                seg.text for seg in list(ctx.get("asr_segments") or []) if (seg.text or "").strip()
+            )
 
         return ctx
 
@@ -225,13 +260,39 @@ class PipelineOrchestrator:
                     transcript_ident = await self.store.save_text(
                         project.id, stage_name.value, "full_transcript.txt", str(ctx.get("full_transcript") or "")
                     )
+                    merged_chunks: list[ASRMergedChunk] = list(ctx.get("asr_merged_chunks") or [])
+                    merged_ident = await self.store.save_json(
+                        project.id,
+                        stage_name.value,
+                        "asr_merged_chunks.json",
+                        serialize_asr_merged_chunks(merged_chunks),
+                    )
                     project.artifacts[stage_name.value] = {
                         "asr_segments.json": asr_ident,
                         "full_transcript.txt": transcript_ident,
+                        "asr_merged_chunks.json": merged_ident,
+                    }
+
+                elif stage_name == StageName.LLM_ASR_CORRECTION:
+                    correction_stage = LLMASRCorrectionStage(self.settings)
+                    try:
+                        ctx = await correction_stage.execute(ctx)
+                    finally:
+                        await _maybe_close(correction_stage)
+
+                    corrected_map: dict[int, ASRCorrectedSegment] = dict(ctx.get("asr_corrected_segments") or {})
+                    corrected_ident = await self.store.save_json(
+                        project.id,
+                        stage_name.value,
+                        "asr_corrected_segments.json",
+                        serialize_asr_corrected_segments(corrected_map),
+                    )
+                    project.artifacts[stage_name.value] = {
+                        "asr_corrected_segments.json": corrected_ident,
                     }
 
                 elif stage_name == StageName.LLM:
-                    max_asr = self.settings.llm.max_asr_segments
+                    max_asr = self.settings.llm_limits.max_asr_segments
                     if isinstance(max_asr, int) and max_asr > 0:
                         asr_segments_for_llm: list[ASRSegment] = list(ctx.get("asr_segments") or [])
                         if len(asr_segments_for_llm) > max_asr:
@@ -269,15 +330,6 @@ class PipelineOrchestrator:
                         "global_context.json",
                         dict(ctx.get("global_context") or {}),
                     )
-                    corrected_map: dict[int, ASRCorrectedSegment] = dict(
-                        ctx.get("asr_corrected_segments") or {}
-                    )
-                    corrected_ident = await self.store.save_json(
-                        project.id,
-                        stage_name.value,
-                        "asr_corrected_segments.json",
-                        serialize_asr_corrected_segments(corrected_map),
-                    )
                     chunks: list[SemanticChunk] = list(ctx.get("semantic_chunks") or [])
                     chunks_ident = await self.store.save_json(
                         project.id,
@@ -287,7 +339,6 @@ class PipelineOrchestrator:
                     )
                     project.artifacts[stage_name.value] = {
                         "global_context.json": global_ident,
-                        "asr_corrected_segments.json": corrected_ident,
                         "semantic_chunks.json": chunks_ident,
                     }
 

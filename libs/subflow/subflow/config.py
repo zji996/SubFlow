@@ -2,10 +2,24 @@
 
 from pathlib import Path
 from typing import Any
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from subflow.exceptions import ConfigurationError
+
 _ENV_FILES = (".env", "../.env", "../../.env")
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _resolve_repo_path(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return raw
+    p = Path(raw)
+    if p.is_absolute():
+        return str(p)
+    return str((_REPO_ROOT / p).resolve())
 
 
 class ASRConfig(BaseSettings):
@@ -22,12 +36,20 @@ class ASRConfig(BaseSettings):
     base_url: str = "http://localhost:8000/v1"
     api_key: str = "abc123"
     model: str = "glm-asr"
-    max_concurrent: int = 20  # 并发请求数
     timeout: float = 300.0  # 单个请求超时（秒）
 
 
-class LLMConfig(BaseSettings):
-    """LLM Provider configuration."""
+class LLMProfileConfig(BaseSettings):
+    """Optional LLM profile override (used for fast/power)."""
+
+    provider: str = "openai"
+    base_url: str = "https://api.openai.com/v1"
+    api_key: str = ""
+    model: str = "gpt-4"
+
+
+class LLMLimitsConfig(BaseSettings):
+    """LLM limits (not tied to any provider/profile)."""
 
     model_config = SettingsConfigDict(
         env_prefix="LLM_",
@@ -36,11 +58,40 @@ class LLMConfig(BaseSettings):
         extra="ignore",
     )
 
-    provider: str = "openai"
-    base_url: str = "https://api.openai.com/v1"
-    api_key: str = ""
-    model: str = "gpt-4"
     max_asr_segments: int | None = None
+
+
+class LLMFastConfig(LLMProfileConfig):
+    model_config = SettingsConfigDict(
+        env_prefix="LLM_FAST_",
+        env_file=_ENV_FILES,
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+
+class LLMPowerConfig(LLMProfileConfig):
+    model_config = SettingsConfigDict(
+        env_prefix="LLM_POWER_",
+        env_file=_ENV_FILES,
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+
+class LLMStageRouting(BaseSettings):
+    """Select which LLM profile each stage uses (fast/power)."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="LLM_",
+        env_file=_ENV_FILES,
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    asr_correction: str = "fast"
+    global_understanding: str = "fast"
+    semantic_translation: str = "power"
 
 
 class AudioConfig(BaseSettings):
@@ -87,6 +138,11 @@ class VADConfig(BaseSettings):
     # Optional: when splitting without a clear valley, trim a small gap around the cut.
     # Higher values -> more fragmentation but higher risk of dropping speech phonemes.
     split_gap_s: float = 0.0
+
+    @model_validator(mode="after")
+    def _resolve_paths(self) -> "VADConfig":
+        self.nemo_model_path = _resolve_repo_path(self.nemo_model_path)
+        return self
 
 
 class LoggingSettings(BaseSettings):
@@ -137,7 +193,22 @@ class Settings(BaseSettings):
     asr: ASRConfig = ASRConfig()
 
     # LLM
-    llm: LLMConfig = LLMConfig()
+    llm_limits: LLMLimitsConfig = LLMLimitsConfig()
+    llm_fast: LLMFastConfig = LLMFastConfig()
+    llm_power: LLMPowerConfig = LLMPowerConfig()
+    llm_stage: LLMStageRouting = LLMStageRouting()
+
+    # Concurrency (stage-level)
+    concurrency_asr: int = Field(default=10, ge=1)
+    concurrency_llm_correction: int = Field(default=10, ge=1)
+
+    @model_validator(mode="after")
+    def _resolve_paths(self) -> "Settings":
+        # Running apps with `uv run --directory apps/*` changes CWD; keep paths stable.
+        self.models_dir = _resolve_repo_path(self.models_dir)
+        self.data_dir = _resolve_repo_path(self.data_dir)
+        self.log_dir = _resolve_repo_path(self.log_dir)
+        return self
 
     # Audio
     audio: AudioConfig = AudioConfig()
@@ -168,3 +239,21 @@ class Settings(BaseSettings):
     @property
     def database_url(self) -> str:
         return f"postgresql://{self.postgres_user}:{self.postgres_password}@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
+
+    def llm_config_for(self, profile: str) -> dict[str, Any]:
+        """Return an LLM config dict for provider registry."""
+        name = str(profile or "").strip().lower()
+        if name in {"", "fast"}:
+            cfg = self.llm_fast.model_dump()
+        elif name == "power":
+            cfg = self.llm_power.model_dump()
+        else:
+            raise ConfigurationError(f"Unknown LLM profile: {profile!r} (expected: fast/power)")
+
+        provider = str(cfg.get("provider") or "").strip()
+        base_url = str(cfg.get("base_url") or "").strip()
+        if not provider or not base_url:
+            raise ConfigurationError(
+                f"LLM profile {name!r} is not configured (need provider/base_url; got provider={provider!r} base_url={base_url!r})"
+            )
+        return cfg

@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 
 from subflow.utils.ffmpeg import resolve_ffmpeg_bin
+from subflow.utils.subprocess import run_subprocess
 
 
 class FFmpegProvider:
@@ -13,26 +13,14 @@ class FFmpegProvider:
         self.ffmpeg_bin = resolve_ffmpeg_bin(ffmpeg_bin)
 
     async def _run(self, args: list[str]) -> None:
-        try:
-            process = await asyncio.create_subprocess_exec(
-                *args,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-        except FileNotFoundError as exc:
-            raise RuntimeError(
-                f"ffmpeg binary not found: {self.ffmpeg_bin}. "
-                "Install ffmpeg and ensure it is in PATH (or install `imageio-ffmpeg` in the env, "
-                "or set AUDIO_FFMPEG_BIN)."
-            ) from exc
-        stdout, stderr = await process.communicate()
-        if process.returncode != 0:
+        result = await run_subprocess(args, capture_output=True)
+        if result.returncode != 0:
             raise RuntimeError(
                 "ffmpeg failed "
-                f"(code={process.returncode}).\n"
+                f"(code={result.returncode}).\n"
                 f"cmd: {' '.join(args)}\n"
-                f"stdout: {stdout.decode(errors='ignore')}\n"
-                f"stderr: {stderr.decode(errors='ignore')}"
+                f"stdout: {result.stdout.decode(errors='ignore')}\n"
+                f"stderr: {result.stderr.decode(errors='ignore')}"
             )
 
     async def extract_audio(self, video_path: str, output_path: str, max_duration_s: float | None = None) -> str:

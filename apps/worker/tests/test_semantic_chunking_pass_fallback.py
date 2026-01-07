@@ -24,5 +24,4 @@ async def test_semantic_chunking_pass_falls_back_without_api_key() -> None:
     assert out["semantic_chunks"][0].translation == "[zh] hello"
 
     assert out["asr_segments_index"][0].text == "hello"
-    assert out["asr_corrected_segments"][2].text == "world"
-
+    assert "asr_corrected_segments" not in out
