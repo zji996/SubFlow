@@ -34,23 +34,25 @@ class ProjectService:
         media_url: str,
         source_language: str | None = None,
         target_language: str = "zh",
+        auto_workflow: bool = True,
     ) -> Project:
         project_id = f"proj_{uuid4().hex}"
-        now = datetime.now(tz=timezone.utc).isoformat()
+        now = datetime.now(tz=timezone.utc)
         project = Project(
             id=project_id,
             name=name,
             media_url=media_url,
             source_language=source_language,
             target_language=target_language,
+            auto_workflow=auto_workflow,
             status=ProjectStatus.PENDING,
             current_stage=0,
             artifacts={},
             stage_runs=[],
+            created_at=now,
+            updated_at=now,
         )
         data = project.to_dict()
-        data["created_at"] = now
-        data["updated_at"] = now
 
         await self.redis.set(self._project_key(project_id), json.dumps(data), ex=30 * 24 * 3600)
         await self.redis.sadd(self._index_key(), project_id)

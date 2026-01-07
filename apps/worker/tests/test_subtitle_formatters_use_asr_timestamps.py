@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from subflow.export import SubtitleExporter
 from subflow.models.segment import ASRCorrectedSegment, ASRSegment, SemanticChunk
-from subflow.models.subtitle_types import SubtitleExportConfig, SubtitleFormat
+from subflow.models.subtitle_types import SubtitleContent, SubtitleExportConfig, SubtitleFormat
 
 
 def test_srt_export_uses_asr_segment_timestamps_and_dual_line() -> None:
@@ -27,7 +27,7 @@ def test_srt_export_uses_asr_segment_timestamps_and_dual_line() -> None:
         chunks=chunks,
         asr_segments=asr_segments,
         asr_corrected_segments=corrected,
-        config=SubtitleExportConfig(format=SubtitleFormat.SRT, include_secondary=True, primary_position="top"),
+        config=SubtitleExportConfig(format=SubtitleFormat.SRT, primary_position="top"),
     )
     assert "00:00:01,200 --> 00:00:03,600" in out
     assert "00:00:03,600 --> 00:00:05,000" in out
@@ -57,7 +57,7 @@ def test_srt_export_includes_filler_as_secondary_only() -> None:
         chunks=chunks,
         asr_segments=asr_segments,
         asr_corrected_segments=corrected,
-        config=SubtitleExportConfig(format=SubtitleFormat.SRT, include_secondary=True, primary_position="top"),
+        config=SubtitleExportConfig(format=SubtitleFormat.SRT, primary_position="top"),
     )
     assert "00:00:00,000 --> 00:00:01,200" in out
     assert "00:00:01,200 --> 00:00:02,000" in out
@@ -65,3 +65,24 @@ def test_srt_export_includes_filler_as_secondary_only() -> None:
     assert "那个" in out
     assert "00:00:02,000 --> 00:00:03,600" in out
     assert "00:00:03,600 --> 00:00:05,000" in out
+
+
+def test_srt_export_primary_only_excludes_secondary_line() -> None:
+    chunks = [
+        SemanticChunk(id=0, text="hello world", translation="你好世界", asr_segment_ids=[0]),
+    ]
+    asr_segments = [
+        ASRSegment(id=0, start=0.0, end=1.0, text="hello world"),
+    ]
+    corrected = {
+        0: ASRCorrectedSegment(id=0, asr_segment_id=0, text="hello world"),
+    }
+
+    out = SubtitleExporter().export(
+        chunks=chunks,
+        asr_segments=asr_segments,
+        asr_corrected_segments=corrected,
+        config=SubtitleExportConfig(format=SubtitleFormat.SRT, content=SubtitleContent.PRIMARY_ONLY),
+    )
+    assert "你好世界" in out
+    assert "hello world" not in out

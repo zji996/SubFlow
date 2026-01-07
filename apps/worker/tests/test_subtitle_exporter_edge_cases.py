@@ -35,7 +35,7 @@ def test_exporter_prefers_corrected_text_for_secondary() -> None:
         chunks=[],
         asr_segments=asr_segments,
         asr_corrected_segments=corrected,
-        config=SubtitleExportConfig(format=SubtitleFormat.SRT, include_secondary=True),
+        config=SubtitleExportConfig(format=SubtitleFormat.SRT),
     )
     assert "Hello" in out
     assert "World" in out

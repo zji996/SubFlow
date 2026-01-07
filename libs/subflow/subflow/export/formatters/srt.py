@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from subflow.export.formatters.base import SubtitleFormatter
+from subflow.export.formatters.base import SubtitleFormatter, selected_lines
 from subflow.models.subtitle_types import SubtitleEntry, SubtitleExportConfig
 
 
@@ -11,9 +11,8 @@ class SRTFormatter(SubtitleFormatter):
         lines: list[str] = []
 
         for entry in entries:
-            primary = (entry.primary_text or "").strip()
-            secondary = (entry.secondary_text or "").strip()
-            if not primary and not secondary:
+            rendered = selected_lines(entry.primary_text, entry.secondary_text, config)
+            if not rendered:
                 continue
 
             lines.append(str(entry.index))
@@ -22,23 +21,9 @@ class SRTFormatter(SubtitleFormatter):
                 f"{self.seconds_to_timestamp(entry.end, ',')}"
             )
 
-            include_secondary = config.include_secondary or (not primary and bool(secondary))
-            if include_secondary:
-                if config.primary_position == "top":
-                    if primary:
-                        lines.append(primary)
-                    if secondary:
-                        lines.append(secondary)
-                else:
-                    if secondary:
-                        lines.append(secondary)
-                    if primary:
-                        lines.append(primary)
-            else:
-                if primary:
-                    lines.append(primary)
+            for _kind, text in rendered:
+                lines.append(text)
 
             lines.append("")
 
         return "\n".join(lines).rstrip() + "\n"
-

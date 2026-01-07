@@ -73,6 +73,8 @@ class SubtitleExporter:
 
         if config.primary_position not in {"top", "bottom"}:
             raise ValueError("primary_position must be 'top' or 'bottom'")
+        if config.content.value not in {"both", "primary_only", "secondary_only"}:
+            raise ValueError("content must be 'both', 'primary_only', or 'secondary_only'")
 
         match config.format:
             case SubtitleFormat.SRT:

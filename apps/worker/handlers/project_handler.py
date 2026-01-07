@@ -101,6 +101,11 @@ async def process_project_task(task: dict[str, Any], redis: Redis, settings: Set
                 return
             stage = StageName(str(stage_raw))
             project, _ = await orchestrator.run_stage(project, stage)
+            await _save_project(redis, project)
+            if project.auto_workflow and stage != StageName.EXPORT:
+                project, _ = await orchestrator.run_stage(project, StageName.EXPORT)
+            elif not project.auto_workflow and project.status == ProjectStatus.PROCESSING:
+                project.status = ProjectStatus.PAUSED
         else:
             return
 

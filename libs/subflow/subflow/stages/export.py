@@ -9,7 +9,7 @@ from subflow.config import Settings
 from subflow.exceptions import ConfigurationError
 from subflow.export.subtitle_exporter import SubtitleExporter
 from subflow.models.segment import ASRCorrectedSegment, ASRSegment, SemanticChunk
-from subflow.models.subtitle_types import SubtitleExportConfig, SubtitleFormat
+from subflow.models.subtitle_types import SubtitleContent, SubtitleExportConfig, SubtitleFormat
 from subflow.pipeline.context import PipelineContext
 from subflow.stages.base import Stage
 
@@ -23,12 +23,12 @@ class ExportStage(Stage):
         self,
         settings: Settings,
         format: str = "srt",
-        include_secondary: bool = True,
+        content: str = "both",
         primary_position: str = "top",
     ) -> None:
         self.settings = settings
         self.format = format
-        self.include_secondary = include_secondary
+        self.content = content
         self.primary_position = primary_position
 
     def validate_input(self, context: PipelineContext) -> bool:
@@ -52,10 +52,16 @@ class ExportStage(Stage):
         except ValueError as exc:
             raise ConfigurationError(f"Unknown subtitle format: {self.format}") from exc
 
+        content_raw = self.content.lower().strip()
+        try:
+            content = SubtitleContent(content_raw)
+        except ValueError as exc:
+            raise ConfigurationError(f"Unknown subtitle content: {self.content}") from exc
+
         logger.info("export start (format=%s, project_id=%s)", fmt.value, run_id)
         config = SubtitleExportConfig(
             format=fmt,
-            include_secondary=self.include_secondary,
+            content=content,
             primary_position=self.primary_position,
         )
         subtitle_text = SubtitleExporter().export(

@@ -86,8 +86,9 @@ curl -X POST "http://localhost:8100/projects" \
   -d '{
     "name": "Demo Video",
     "media_url": "s3://bucket/path/to/video.mp4",
+    "source_language": "en",
     "target_language": "zh",
-    "language": "en"
+    "auto_workflow": true
   }'
 ```
 
@@ -110,7 +111,7 @@ curl "http://localhost:8100/projects/<project_id>"
 ### 4) 预览字幕
 
 ```bash
-curl "http://localhost:8100/projects/<project_id>/subtitles"
+curl "http://localhost:8100/projects/<project_id>/subtitles/preview?format=srt&content=both"
 ```
 
 ### 5) 查看本地 artifacts（可选）

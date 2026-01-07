@@ -6,7 +6,7 @@ from subflow.stages.llm_passes import SemanticChunkingPass
 
 
 async def test_semantic_chunking_pass_falls_back_without_api_key() -> None:
-    settings = Settings(llm={"api_key": ""})
+    settings = Settings(llm_fast={"api_key": ""}, llm_power={"api_key": ""})
     stage = SemanticChunkingPass(settings)
 
     out = await stage.execute(

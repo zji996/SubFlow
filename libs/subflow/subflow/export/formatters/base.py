@@ -3,8 +3,42 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import Literal
 
 from subflow.models.subtitle_types import SubtitleEntry, SubtitleExportConfig
+
+
+SubtitleLineKind = Literal["primary", "secondary"]
+
+
+def selected_lines(
+    primary: str,
+    secondary: str,
+    config: SubtitleExportConfig,
+) -> list[tuple[SubtitleLineKind, str]]:
+    primary = (primary or "").strip()
+    secondary = (secondary or "").strip()
+    if not primary and not secondary:
+        return []
+
+    match config.content.value:
+        case "both":
+            ordered: list[tuple[SubtitleLineKind, str]]
+            if config.primary_position == "top":
+                ordered = [("primary", primary), ("secondary", secondary)]
+            else:
+                ordered = [("secondary", secondary), ("primary", primary)]
+            out: list[tuple[SubtitleLineKind, str]] = []
+            for kind, text in ordered:
+                if text:
+                    out.append((kind, text))
+            return out
+        case "primary_only":
+            return [("primary", primary)] if primary else []
+        case "secondary_only":
+            return [("secondary", secondary)] if secondary else []
+        case _:
+            raise ValueError(f"Unknown subtitle content: {config.content}")
 
 
 class SubtitleFormatter(ABC):
@@ -24,4 +58,3 @@ class SubtitleFormatter(ABC):
         m = total_m % 60
         h = total_m // 60
         return f"{h:02d}:{m:02d}:{s:02d}{separator}{ms:03d}"
-
