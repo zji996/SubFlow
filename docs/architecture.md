@@ -187,7 +187,9 @@ SubFlow 是一个基于语义理解的视频字幕翻译系统。与传统的逐
 **目标**：通过 2 轮 LLM 处理，完成全局理解、语义块切分与翻译（ASR 纠错已在 Stage 4 完成）。
 
 - Pass 1（全局理解）：生成 `global_context`（主题/领域/风格/术语表/翻译注意事项）
-- Pass 2（语义切分+翻译）：从（已纠错的）`asr_segments` 生成 `semantic_chunks`（包含 `translation`）
+- Pass 2（语义切分+翻译）：从（已纠错的）`asr_segments` 生成 `semantic_chunks`，包含：
+  - `translation`：完整意译
+  - `translation_chunks`：翻译分段（1 个 chunk 可覆盖多个段落）
 
 Stage 5 的详细提示词、输入/输出 JSON、以及给 LLM 的实际输入（System Prompt + User Input）已拆到：`docs/llm_multi_pass.md`。
 
@@ -200,7 +202,9 @@ Stage 5 的详细提示词、输入/输出 JSON、以及给 LLM 的实际输入�
 
 **目标**：将翻译结果导出为标准字幕格式（默认双行字幕）。
 
-- 第一行（主字幕）：`SemanticChunk.translation`
+- 第一行（主字幕）：根据 `translation_style` 配置
+  - `per_chunk`（默认）：按 `translation_chunks` 分配（同一 chunk 覆盖的段落共享翻译片段）
+  - `full`：`SemanticChunk.translation`（完整意译，所有段落共享）
 - 第二行（子字幕）：每个 `ASRSegment` 对应的 `ASRCorrectedSegment.text`（若无纠错则回退到 `ASRSegment.text`）
 
 ```

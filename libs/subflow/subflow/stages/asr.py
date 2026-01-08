@@ -75,7 +75,7 @@ class ASRStage(Stage):
                 input_path=vocals_path,
                 segments=time_ranges,
                 output_dir=str(segments_dir),
-                max_concurrent=10,  # FFmpeg 并发数
+                max_concurrent=int(self.settings.asr.ffmpeg_concurrency),
                 ffmpeg_bin=self.settings.audio.ffmpeg_bin,
             )
 
@@ -119,7 +119,7 @@ class ASRStage(Stage):
             merged_specs = build_merged_chunk_specs(
                 vad_regions,
                 vad_segments,
-                max_chunk_s=30.0,
+                max_chunk_s=float(self.settings.asr.max_chunk_s),
             )
             merged_chunks: list[ASRMergedChunk] = []
             if merged_specs:
@@ -160,14 +160,14 @@ class ASRStage(Stage):
                 cleanup_segment_files([str(p) for p in segments_dir.glob("*.wav")])
                 try:
                     segments_dir.rmdir()
-                except OSError:
-                    pass
+                except OSError as exc:
+                    logger.debug("failed to remove temp dir %s: %s", segments_dir, exc)
             if merged_dir.exists():
                 cleanup_segment_files([str(p) for p in merged_dir.glob("*.wav")])
                 try:
                     merged_dir.rmdir()
-                except OSError:
-                    pass
+                except OSError as exc:
+                    logger.debug("failed to remove temp dir %s: %s", merged_dir, exc)
 
         return context
 

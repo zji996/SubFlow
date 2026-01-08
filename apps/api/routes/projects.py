@@ -24,7 +24,7 @@ from subflow.models.serializers import (
     deserialize_semantic_chunks,
 )
 from subflow.models.subtitle_types import AssStyleConfig, SubtitleContent, SubtitleExportConfig, SubtitleFormat
-from subflow.storage import LocalArtifactStore
+from subflow.storage import get_artifact_store
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -79,7 +79,8 @@ class SubtitlePreviewResponse(BaseModel):
 
 def _service(request: Request) -> ProjectService:
     redis: Redis = request.app.state.redis
-    return ProjectService(redis=redis)
+    settings: Settings = request.app.state.settings
+    return ProjectService(redis=redis, settings=settings)
 
 
 def _to_response(project: Project) -> ProjectResponse:
@@ -103,7 +104,7 @@ async def _load_subtitle_materials(
     settings: Settings,
     project: Project,
 ) -> tuple[list[SemanticChunk], list[ASRSegment], dict[int, ASRCorrectedSegment] | None]:
-    store = LocalArtifactStore(settings.data_dir)
+    store = get_artifact_store(settings)
 
     asr_segments: list[ASRSegment] = []
     try:

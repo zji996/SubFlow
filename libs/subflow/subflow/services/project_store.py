@@ -10,9 +10,9 @@ from subflow.models.project import Project
 
 
 class ProjectStore:
-    def __init__(self, redis_client: Redis, *, ttl_seconds: int = 30 * 24 * 3600) -> None:
+    def __init__(self, redis_client: Redis, *, ttl_seconds: int) -> None:
         self._redis = redis_client
-        self._ttl_seconds = int(ttl_seconds)
+        self._ttl_seconds = max(1, int(ttl_seconds))
 
     @staticmethod
     def key(project_id: str) -> str:
@@ -31,4 +31,3 @@ class ProjectStore:
     async def delete(self, project_id: str) -> bool:
         removed = await self._redis.delete(self.key(project_id))
         return bool(removed)
-

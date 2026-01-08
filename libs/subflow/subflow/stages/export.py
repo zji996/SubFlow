@@ -9,7 +9,12 @@ from subflow.config import Settings
 from subflow.exceptions import ConfigurationError
 from subflow.export.subtitle_exporter import SubtitleExporter
 from subflow.models.segment import ASRCorrectedSegment, ASRSegment, SemanticChunk
-from subflow.models.subtitle_types import SubtitleContent, SubtitleExportConfig, SubtitleFormat
+from subflow.models.subtitle_types import (
+    SubtitleContent,
+    SubtitleExportConfig,
+    SubtitleFormat,
+    TranslationStyle,
+)
 from subflow.pipeline.context import PipelineContext
 from subflow.stages.base import Stage
 
@@ -25,11 +30,13 @@ class ExportStage(Stage):
         format: str = "srt",
         content: str = "both",
         primary_position: str = "top",
+        translation_style: str = "per_chunk",
     ) -> None:
         self.settings = settings
         self.format = format
         self.content = content
         self.primary_position = primary_position
+        self.translation_style = translation_style
 
     def validate_input(self, context: PipelineContext) -> bool:
         run_id = context.get("project_id") or context.get("job_id")
@@ -58,11 +65,25 @@ class ExportStage(Stage):
         except ValueError as exc:
             raise ConfigurationError(f"Unknown subtitle content: {self.content}") from exc
 
-        logger.info("export start (format=%s, project_id=%s)", fmt.value, run_id)
+        style_raw = self.translation_style.lower().strip()
+        try:
+            translation_style = TranslationStyle(style_raw)
+        except ValueError as exc:
+            raise ConfigurationError(
+                f"Unknown translation style: {self.translation_style}"
+            ) from exc
+
+        logger.info(
+            "export start (format=%s, translation_style=%s, project_id=%s)",
+            fmt.value,
+            translation_style.value,
+            run_id,
+        )
         config = SubtitleExportConfig(
             format=fmt,
             content=content,
             primary_position=self.primary_position,
+            translation_style=translation_style,
         )
         subtitle_text = SubtitleExporter().export(
             chunks=chunks,

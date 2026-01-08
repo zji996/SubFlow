@@ -24,7 +24,7 @@ class GLMASRProvider(ASRProvider):
         self,
         base_url: str,
         model: str = "glm-asr",
-        api_key: str = "abc123",
+        api_key: str = "",
         max_concurrent: int = 20,
         timeout: float = 300.0,
     ) -> None:
@@ -78,7 +78,7 @@ class GLMASRProvider(ASRProvider):
             List containing single ASRSegment with transcribed text
         """
         client = await self._get_client()
-        headers = {"Authorization": f"Bearer {self.api_key}"}
+        headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else None
 
         filename = Path(audio_path).name
         with open(audio_path, "rb") as f:

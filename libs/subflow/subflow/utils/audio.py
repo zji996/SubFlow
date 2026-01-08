@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from pathlib import Path
 
 from subflow.utils.ffmpeg import resolve_ffmpeg_bin
 from subflow.utils.subprocess import run_subprocess
+
+logger = logging.getLogger(__name__)
 
 
 async def cut_audio_segment(
@@ -87,5 +90,5 @@ def cleanup_segment_files(paths: list[str]) -> None:
             os.remove(path)
         except FileNotFoundError:
             pass
-        except OSError:
-            pass
+        except OSError as exc:
+            logger.warning("failed to remove segment file %s: %s", path, exc)

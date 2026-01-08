@@ -8,7 +8,7 @@ from pathlib import Path
 from subflow.config import Settings
 from subflow.models.project import Project, StageName
 from subflow.pipeline import PipelineOrchestrator
-from subflow.storage import LocalArtifactStore
+from subflow.storage import get_artifact_store
 
 
 def _parse_args() -> argparse.Namespace:
@@ -61,7 +61,7 @@ async def _run() -> int:
         target_language=str(args.target_language),
     )
 
-    store = LocalArtifactStore(settings.data_dir)
+    store = get_artifact_store(settings)
     orchestrator = PipelineOrchestrator(settings, store=store)
     from_stage = StageName(str(args.from_stage)) if args.from_stage else None
     project, _ = await orchestrator.run_all(project, from_stage=from_stage)

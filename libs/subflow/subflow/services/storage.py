@@ -40,6 +40,30 @@ class StorageService:
         remote_key = remote_key.lstrip("/")
         return f"{self.endpoint}/{self.bucket}/{remote_key}"
 
+    async def close(self) -> None:
+        client = self._client
+        if client is None:
+            return
+
+        close = getattr(client, "close", None)
+        if close is not None and callable(close):
+            try:
+                await asyncio.to_thread(close)
+            except Exception:
+                pass
+        self._client = None
+
+    async def __aenter__(self) -> "StorageService":
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: object | None,
+    ) -> None:
+        await self.close()
+
     async def upload_file(self, local_path: str, remote_key: str) -> str:
         """上传文件，返回 URL"""
         client = self._ensure_client()

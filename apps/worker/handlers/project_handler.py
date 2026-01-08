@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -11,7 +12,9 @@ from subflow.config import Settings
 from subflow.models.project import Project, ProjectStatus, StageName
 from subflow.pipeline import PipelineOrchestrator
 from subflow.services import ProjectStore, StorageService
-from subflow.storage import LocalArtifactStore
+from subflow.storage import get_artifact_store
+
+logger = logging.getLogger(__name__)
 
 
 async def _maybe_upload_export(settings: Settings, project: Project) -> None:
@@ -24,23 +27,27 @@ async def _maybe_upload_export(settings: Settings, project: Project) -> None:
         path = Path(str(local_path))
         if not path.exists():
             return
-    except Exception:
+    except Exception as exc:
+        logger.warning("invalid export path %r: %s", local_path, exc)
         return
 
     if not settings.s3_endpoint or not settings.s3_bucket_name:
         return
 
-    storage = StorageService(
+    remote_key = f"projects/{project.id}/subtitles.srt"
+    async with StorageService(
         endpoint=settings.s3_endpoint,
         access_key=settings.s3_access_key,
         secret_key=settings.s3_secret_key,
         bucket=settings.s3_bucket_name,
-    )
-    remote_key = f"projects/{project.id}/subtitles.srt"
-    await storage.upload_file(str(path), remote_key)
-    url = await storage.get_presigned_url(remote_key, expires_in=24 * 3600)
-    export["subtitles.srt_url"] = url
-    project.artifacts[StageName.EXPORT.value] = export
+    ) as storage:
+        await storage.upload_file(str(path), remote_key)
+        url = await storage.get_presigned_url(
+            remote_key,
+            expires_in=int(settings.s3_presign_expires_hours) * 3600,
+        )
+        export["subtitles.srt_url"] = url
+        project.artifacts[StageName.EXPORT.value] = export
 
 
 async def process_project_task(task: dict[str, Any], redis: Redis, settings: Settings) -> None:
@@ -48,12 +55,15 @@ async def process_project_task(task: dict[str, Any], redis: Redis, settings: Set
     if not project_id:
         return
 
-    project_store = ProjectStore(redis)
+    project_store = ProjectStore(
+        redis,
+        ttl_seconds=int(settings.redis_project_ttl_days) * 24 * 3600,
+    )
     project = await project_store.get(project_id)
     if project is None:
         return
 
-    store = LocalArtifactStore(settings.data_dir)
+    store = get_artifact_store(settings)
     orchestrator = PipelineOrchestrator(settings, store=store)
 
     try:

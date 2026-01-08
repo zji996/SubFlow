@@ -8,14 +8,19 @@ from uuid import uuid4
 
 from redis.asyncio import Redis
 
+from subflow.config import Settings
 from subflow.models.project import Project, ProjectStatus, StageName
 from subflow.services import ProjectStore
 
 
 class ProjectService:
-    def __init__(self, redis: Redis):
+    def __init__(self, redis: Redis, settings: Settings):
         self.redis = redis
-        self.store = ProjectStore(redis)
+        self.settings = settings
+        self.store = ProjectStore(
+            redis,
+            ttl_seconds=int(settings.redis_project_ttl_days) * 24 * 3600,
+        )
 
     @staticmethod
     def _index_key() -> str:

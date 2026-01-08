@@ -9,7 +9,12 @@ from subflow.export.formatters.json_format import JSONFormatter
 from subflow.export.formatters.srt import SRTFormatter
 from subflow.export.formatters.vtt import VTTFormatter
 from subflow.models.segment import ASRCorrectedSegment, ASRSegment, SemanticChunk
-from subflow.models.subtitle_types import SubtitleEntry, SubtitleExportConfig, SubtitleFormat
+from subflow.models.subtitle_types import (
+    SubtitleEntry,
+    SubtitleExportConfig,
+    SubtitleFormat,
+    TranslationStyle,
+)
 
 
 class SubtitleExporter:
@@ -18,14 +23,24 @@ class SubtitleExporter:
         chunks: list[SemanticChunk],
         asr_segments: list[ASRSegment],
         asr_corrected_segments: dict[int, ASRCorrectedSegment] | None,
+        translation_style: TranslationStyle = TranslationStyle.PER_CHUNK,
     ) -> list[SubtitleEntry]:
         corrected_index: dict[int, ASRCorrectedSegment] = dict(asr_corrected_segments or {})
 
+        # Build segment_id -> chunk mapping
         chunk_by_segment_id: dict[int, SemanticChunk] = {}
         for semantic_chunk in chunks:
             for seg_id in list(semantic_chunk.asr_segment_ids or []):
                 if seg_id not in chunk_by_segment_id:
                     chunk_by_segment_id[int(seg_id)] = semantic_chunk
+
+        # Build segment_id -> per-chunk translation mapping
+        per_chunk_translation: dict[int, str] = {}
+        for semantic_chunk in chunks:
+            for ch in list(semantic_chunk.translation_chunks or []):
+                for seg_id in list(ch.segment_ids or []):
+                    if seg_id not in per_chunk_translation:
+                        per_chunk_translation[int(seg_id)] = str(ch.text or "")
 
         items: list[tuple[float, float, int, SubtitleEntry]] = []
         seq = 0
@@ -33,7 +48,13 @@ class SubtitleExporter:
         for seg in asr_segments:
             corrected = corrected_index.get(seg.id)
             chunk_for_seg = chunk_by_segment_id.get(seg.id)
-            primary = (chunk_for_seg.translation if chunk_for_seg is not None else "") or ""
+
+            # Determine primary text based on translation_style
+            if translation_style in {TranslationStyle.PER_CHUNK, TranslationStyle.PER_SEGMENT}:
+                primary = per_chunk_translation.get(seg.id, "")
+            else:
+                primary = (chunk_for_seg.translation if chunk_for_seg is not None else "") or ""
+
             primary = primary.strip()
             secondary = ((corrected.text if corrected is not None else "") or "").strip() or (
                 (seg.text or "").strip()
@@ -69,6 +90,7 @@ class SubtitleExporter:
             chunks=chunks,
             asr_segments=asr_segments,
             asr_corrected_segments=asr_corrected_segments,
+            translation_style=config.translation_style,
         )
 
         if config.primary_position not in {"top", "bottom"}:

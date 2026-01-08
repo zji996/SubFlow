@@ -17,7 +17,7 @@ def get_asr_provider(config: dict) -> ASRProvider:
 
             return GLMASRProvider(
                 base_url=config["base_url"],
-                api_key=str(config.get("api_key") or "abc123"),
+                api_key=str(config.get("api_key") or ""),
                 model=config.get("model", "glm-asr-nano-2512"),
                 max_concurrent=int(config.get("max_concurrent", 20)),
                 timeout=float(config.get("timeout", 300.0)),

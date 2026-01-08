@@ -7,31 +7,18 @@ import json
 import logging
 from typing import Any, cast
 
-from subflow.config import Settings
 from subflow.exceptions import StageExecutionError
 from subflow.models.segment import ASRCorrectedSegment, ASRMergedChunk, ASRSegment
 from subflow.pipeline.context import PipelineContext
-from subflow.providers import get_llm_provider
 from subflow.providers.llm import Message
-from subflow.stages.base import Stage
-from subflow.utils.llm_json import LLMJSONHelper
+from subflow.stages.base_llm import BaseLLMStage
 
 logger = logging.getLogger(__name__)
 
 
-class LLMASRCorrectionStage(Stage):
+class LLMASRCorrectionStage(BaseLLMStage):
     name = "llm_asr_correction"
-
-    def __init__(self, settings: Settings) -> None:
-        self.settings = settings
-        self.profile = str(getattr(settings, "llm_stage").asr_correction or "fast")
-        self.llm_cfg = settings.llm_config_for(self.profile)
-        self.llm = get_llm_provider(self.llm_cfg)
-        self.api_key = str(self.llm_cfg.get("api_key") or "")
-        self.json_helper = LLMJSONHelper(self.llm, max_retries=3)
-
-    async def close(self) -> None:
-        await self.llm.close()
+    profile_attr = "asr_correction"
 
     def validate_input(self, context: PipelineContext) -> bool:
         return bool(context.get("asr_segments"))

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from subflow.export import SubtitleExporter
-from subflow.models.segment import ASRCorrectedSegment, ASRSegment, SemanticChunk
+from subflow.models.segment import ASRCorrectedSegment, ASRSegment, SemanticChunk, TranslationChunk
 from subflow.models.subtitle_types import SubtitleContent, SubtitleExportConfig, SubtitleFormat
 
 
@@ -12,6 +12,7 @@ def test_srt_export_uses_asr_segment_timestamps_and_dual_line() -> None:
             text="hello",
             translation="你好",
             asr_segment_ids=[2, 3],
+            translation_chunks=[TranslationChunk(text="你好", segment_ids=[2, 3])],
         )
     ]
     asr_segments = [
@@ -69,7 +70,13 @@ def test_srt_export_includes_filler_as_secondary_only() -> None:
 
 def test_srt_export_primary_only_excludes_secondary_line() -> None:
     chunks = [
-        SemanticChunk(id=0, text="hello world", translation="你好世界", asr_segment_ids=[0]),
+        SemanticChunk(
+            id=0,
+            text="hello world",
+            translation="你好世界",
+            asr_segment_ids=[0],
+            translation_chunks=[TranslationChunk(text="你好世界", segment_ids=[0])],
+        ),
     ]
     asr_segments = [
         ASRSegment(id=0, start=0.0, end=1.0, text="hello world"),

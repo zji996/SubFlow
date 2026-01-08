@@ -34,9 +34,11 @@ class ASRConfig(BaseSettings):
 
     provider: str = "glm_asr"
     base_url: str = "http://localhost:8000/v1"
-    api_key: str = "abc123"
+    api_key: str = ""
     model: str = "glm-asr"
     timeout: float = 300.0  # 单个请求超时（秒）
+    ffmpeg_concurrency: int = Field(default=10, ge=1)
+    max_chunk_s: float = Field(default=30.0, gt=0)
 
 
 class LLMProfileConfig(BaseSettings):
@@ -184,12 +186,17 @@ class Settings(BaseSettings):
 
     # Redis
     redis_url: str = "redis://localhost:6379"
+    redis_project_ttl_days: int = Field(default=30, ge=1)
+
+    # Artifacts
+    artifact_store_backend: str = "local"  # "local" | "s3"
 
     # S3/MinIO
     s3_endpoint: str = "http://localhost:9000"
     s3_access_key: str = "minioadmin"
     s3_secret_key: str = "minioadmin"
     s3_bucket_name: str = "subflow"
+    s3_presign_expires_hours: int = Field(default=24, ge=1)
 
     # ASR
     asr: ASRConfig = ASRConfig()
