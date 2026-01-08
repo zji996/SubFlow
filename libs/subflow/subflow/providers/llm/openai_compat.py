@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from typing import Any
 
 import httpx
 from tenacity import retry, stop_after_attempt, wait_exponential
 
+from subflow.error_codes import ErrorCode
 from subflow.exceptions import ProviderError
 from subflow.providers.llm.base import LLMProvider, Message
 
@@ -60,6 +62,7 @@ class OpenAICompatProvider(LLMProvider):
             payload["max_tokens"] = max_tokens
 
         client = await self._get_client()
+        started = time.perf_counter()
         try:
             response = await client.post(
                 f"{self.base_url}/chat/completions",
@@ -68,9 +71,35 @@ class OpenAICompatProvider(LLMProvider):
             )
             response.raise_for_status()
             result = response.json()
+        except httpx.TimeoutException as exc:
+            logger.warning("llm request timeout: %s", exc)
+            raise ProviderError(
+                "openai_compat",
+                str(exc),
+                error_code=ErrorCode.LLM_TIMEOUT,
+            ) from exc
         except httpx.HTTPError as exc:
             logger.warning("llm request failed: %s", exc)
-            raise ProviderError("openai_compat", str(exc)) from exc
+            raise ProviderError(
+                "openai_compat",
+                str(exc),
+                error_code=ErrorCode.LLM_FAILED,
+            ) from exc
+
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        usage = result.get("usage") if isinstance(result, dict) else None
+        tokens_used: int | None = None
+        if isinstance(usage, dict):
+            raw = usage.get("total_tokens")
+            if isinstance(raw, int):
+                tokens_used = raw
+        logger.info(
+            "llm call (provider=%s, model=%s, latency_ms=%s, tokens_used=%s)",
+            "openai_compat",
+            self.model,
+            latency_ms,
+            tokens_used,
+        )
 
         return str(result["choices"][0]["message"]["content"])
 

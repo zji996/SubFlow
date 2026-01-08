@@ -32,6 +32,11 @@ class PipelineContext(TypedDict, total=False):
     asr_merged_chunks: list[ASRMergedChunk]
 
     global_context: dict[str, Any]
+    topic: str
+    domain: str
+    style: str
+    glossary: dict[str, str]
+    translation_notes: list[str]
     asr_corrected_segments: dict[int, ASRCorrectedSegment]
     semantic_chunks: list[SemanticChunk]
 

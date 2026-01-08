@@ -2,6 +2,7 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass
@@ -39,7 +40,7 @@ class LLMProvider(ABC):
         self,
         messages: list[Message],
         temperature: float = 0.3,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Generate a structured JSON response.
 
         Args:

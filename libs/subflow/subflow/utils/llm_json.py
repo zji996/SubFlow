@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from subflow.providers.llm import LLMProvider, Message
 
@@ -13,8 +13,10 @@ from subflow.providers.llm import LLMProvider, Message
 _THINK_BLOCK_RE = re.compile(r"^\s*<think>[\s\S]*?</think>\s*", re.IGNORECASE)
 _THINK_TAG_RE = re.compile(r"</?think>\s*", re.IGNORECASE)
 
+JSONData = dict[str, Any] | list[Any]
 
-def parse_llm_json(text: str) -> dict | list:
+
+def parse_llm_json(text: str) -> JSONData:
     """Parse JSON from LLM output, supporting Markdown code blocks.
     
     Handles:
@@ -52,7 +54,9 @@ def parse_llm_json(text: str) -> dict | list:
     first_error: json.JSONDecodeError | None = None
     try:
         data = json.loads(text)
-        if isinstance(data, (dict, list)):
+        if isinstance(data, dict):
+            return cast(dict[str, Any], data)
+        if isinstance(data, list):
             return data
         raise json.JSONDecodeError("Expected a JSON object/array", text, 0)
     except json.JSONDecodeError as exc:
@@ -76,9 +80,11 @@ def parse_llm_json(text: str) -> dict | list:
         raise first_error
 
     candidate = text[start_idx : end_idx + 1].strip()
-    data = json.loads(candidate)
-    if isinstance(data, (dict, list)):
-        return data
+    data2 = json.loads(candidate)
+    if isinstance(data2, dict):
+        return cast(dict[str, Any], data2)
+    if isinstance(data2, list):
+        return data2
     raise json.JSONDecodeError("Expected a JSON object/array", candidate, 0)
 
 
@@ -86,7 +92,7 @@ def parse_llm_json(text: str) -> dict | list:
 class JSONRetryResult:
     """Result of JSON parsing with retry."""
     
-    data: dict | list | None
+    data: JSONData | None
     success: bool
     attempts: int
     last_error: str | None = None
@@ -111,7 +117,7 @@ class LLMJSONHelper:
         self,
         messages: list[Message],
         temperature: float = 0.3,
-    ) -> dict | list:
+    ) -> JSONData:
         """Complete LLM request and parse JSON with retry.
         
         Args:
@@ -159,6 +165,6 @@ class LLMJSONHelper:
         self,
         messages: list[Message],
         temperature: float = 0.3,
-    ) -> dict | list:
+    ) -> JSONData:
         """Alias for complete_json_with_retry."""
         return await self.complete_json_with_retry(messages, temperature)

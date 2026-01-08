@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from pathlib import Path
 from typing import cast
@@ -12,6 +13,7 @@ from subflow.config import Settings
 from subflow.exceptions import ConfigurationError, StageExecutionError
 from subflow.pipeline.context import PipelineContext
 from subflow.providers import get_audio_provider
+from subflow.services import BlobStore
 from subflow.stages.base import Stage
 
 logger = logging.getLogger(__name__)
@@ -37,6 +39,8 @@ class AudioPreprocessStage(Stage):
 
         logger.info("audio_preprocess start (project_id=%s)", run_id)
 
+        blob_store = BlobStore(self.settings)
+
         base_dir = Path(self.settings.data_dir) / "projects" / run_id
         base_dir.mkdir(parents=True, exist_ok=True)
         video_path = base_dir / "input_video"
@@ -51,6 +55,15 @@ class AudioPreprocessStage(Stage):
             if Path(media_url).exists():
                 video_path = Path(media_url)
                 logger.debug("use file media_url=%s", video_path)
+                ref = await blob_store.ingest_file(
+                    project_id=run_id,
+                    file_type="input_video",
+                    local_path=str(video_path),
+                    original_filename=video_path.name,
+                    mime_type=None,
+                    move=False,
+                )
+                video_path = Path(ref.path)
             elif media_url.startswith("http://") or media_url.startswith("https://"):
                 suffix = Path(media_url.split("?")[0]).suffix or ".mp4"
                 video_path = base_dir / f"input{suffix}"
@@ -58,13 +71,29 @@ class AudioPreprocessStage(Stage):
                     async with httpx.AsyncClient() as client:
                         async with client.stream("GET", media_url, timeout=600.0) as resp:
                             resp.raise_for_status()
+                            h = hashlib.sha256()
+                            size = 0
+                            content_type = str(resp.headers.get("Content-Type") or "").strip() or None
                             with open(video_path, "wb") as f:
                                 async for chunk in resp.aiter_bytes():
                                     f.write(chunk)
+                                    h.update(chunk)
+                                    size += len(chunk)
                 except httpx.HTTPError as exc:
                     logger.exception("download failed (media_url=%s)", media_url)
                     raise StageExecutionError(self.name, f"download failed: {exc}") from exc
                 logger.info("downloaded media_url to %s", video_path)
+                ref = await blob_store.ingest_hashed_file(
+                    project_id=run_id,
+                    file_type="input_video",
+                    local_path=str(video_path),
+                    hash_hex=h.hexdigest(),
+                    size_bytes=size,
+                    original_filename=video_path.name,
+                    mime_type=content_type,
+                    move=True,
+                )
+                video_path = Path(ref.path)
             else:
                 raise ConfigurationError("Unsupported media_url; provide local path or http(s) url")
 
@@ -84,7 +113,24 @@ class AudioPreprocessStage(Stage):
 
         context = cast(PipelineContext, dict(context))
         context["video_path"] = str(video_path)
-        context["audio_path"] = str(audio_path)
-        context["vocals_audio_path"] = vocals_path
-        logger.info("audio_preprocess done (vocals_audio_path=%s)", vocals_path)
+
+        audio_ref = await blob_store.ingest_file(
+            project_id=run_id,
+            file_type="audio",
+            local_path=str(audio_path),
+            original_filename="audio.wav",
+            mime_type="audio/wav",
+            move=True,
+        )
+        vocals_ref = await blob_store.ingest_file(
+            project_id=run_id,
+            file_type="vocals",
+            local_path=str(vocals_path),
+            original_filename="vocals.wav",
+            mime_type="audio/wav",
+            move=True,
+        )
+        context["audio_path"] = str(audio_ref.path)
+        context["vocals_audio_path"] = str(vocals_ref.path)
+        logger.info("audio_preprocess done (vocals_audio_path=%s)", vocals_ref.path)
         return context

@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -75,6 +76,13 @@ class SubtitlePreviewEntry(BaseModel):
 class SubtitlePreviewResponse(BaseModel):
     entries: list[SubtitlePreviewEntry]
     total: int
+
+
+def _safe_filename_base(value: str) -> str:
+    cleaned = "".join(ch for ch in value if ch.isalnum() or ch in {" ", "_", "-", "."})
+    cleaned = "_".join(cleaned.strip().split())
+    cleaned = cleaned.strip("._-")
+    return cleaned[:80] or "subtitles"
 
 
 def _service(request: Request) -> ProjectService:
@@ -220,6 +228,48 @@ async def get_artifacts(request: Request, project_id: str, stage: StageName) -> 
     return {"project_id": project_id, "stage": stage.value, "artifacts": artifacts.get(stage.value)}
 
 
+@router.get("/{project_id}/artifacts/{stage}/{artifact_name}")
+async def get_artifact_content(
+    request: Request,
+    project_id: str,
+    stage: StageName,
+    artifact_name: str,
+) -> dict[str, Any]:
+    service = _service(request)
+    project = await service.get_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="project not found")
+
+    if "/" in artifact_name or "\\" in artifact_name or ".." in artifact_name:
+        raise HTTPException(status_code=400, detail="invalid artifact name")
+
+    settings: Settings | None = getattr(request.app.state, "settings", None)
+    if settings is None:
+        raise HTTPException(status_code=500, detail="settings not initialized")
+
+    store = get_artifact_store(settings)
+    try:
+        if artifact_name.endswith(".json"):
+            data = await store.load_json(project_id, stage.value, artifact_name)
+            return {
+                "project_id": project_id,
+                "stage": stage.value,
+                "name": artifact_name,
+                "kind": "json",
+                "data": data,
+            }
+        text = await store.load_text(project_id, stage.value, artifact_name)
+        return {
+            "project_id": project_id,
+            "stage": stage.value,
+            "name": artifact_name,
+            "kind": "text",
+            "data": text,
+        }
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="artifact not found") from None
+
+
 @router.get("/{project_id}/subtitles", response_model=SubtitleResponse)
 async def get_subtitles(request: Request, project_id: str) -> SubtitleResponse:
     service = _service(request)
@@ -228,11 +278,24 @@ async def get_subtitles(request: Request, project_id: str) -> SubtitleResponse:
         raise HTTPException(status_code=404, detail="project not found")
 
     export: dict[str, Any] = (project.artifacts or {}).get(StageName.EXPORT.value) or {}
-    local_path = export.get("subtitles.srt")
     presigned_url = export.get("subtitles.srt_url")
 
     settings: Settings | None = getattr(request.app.state, "settings", None)
-    data_root = Path(settings.data_dir).resolve() if settings is not None else None
+    if settings is None:
+        raise HTTPException(status_code=500, detail="settings not initialized")
+
+    store = get_artifact_store(settings)
+    try:
+        content = await store.load_text(project_id, StageName.EXPORT.value, "subtitles.srt")
+        backend = str(getattr(settings, "artifact_store_backend", "") or "").strip().lower() or "artifact_store"
+        return SubtitleResponse(source=backend, content=content)
+    except FileNotFoundError:
+        pass
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"failed to load subtitles: {exc}") from exc
+
+    local_path = export.get("subtitles.srt")
+    data_root = Path(settings.data_dir).resolve()
 
     if local_path:
         try:
@@ -342,6 +405,9 @@ async def download_subtitles(
     if project is None:
         raise HTTPException(status_code=404, detail="project not found")
 
+    if int(project.current_stage) < 5:
+        raise HTTPException(status_code=409, detail="请先完成 LLM 翻译阶段")
+
     settings: Settings | None = getattr(request.app.state, "settings", None)
     if settings is None:
         raise HTTPException(status_code=500, detail="settings not initialized")
@@ -354,7 +420,7 @@ async def download_subtitles(
 
     chunks, asr_segments, corrected = await _load_subtitle_materials(settings, project)
     if not asr_segments:
-        raise HTTPException(status_code=404, detail="asr segments not found")
+        raise HTTPException(status_code=404, detail="ASR 数据不存在")
 
     ass_style: AssStyleConfig | None = None
     if fmt == SubtitleFormat.ASS:
@@ -393,7 +459,15 @@ async def download_subtitles(
         "ass": "text/plain; charset=utf-8",
         "json": "application/json; charset=utf-8",
     }.get(fmt.value, "text/plain; charset=utf-8")
-    headers = {"Content-Disposition": f'attachment; filename="subtitles.{fmt.value}"'}
+
+    base_name = _safe_filename_base(str(project.name or "subtitles"))
+    ascii_base = base_name.encode("ascii", "ignore").decode("ascii") or "subtitles"
+    filename = f"{base_name}.{fmt.value}"
+    headers = {
+        "Content-Disposition": (
+            f'attachment; filename="{ascii_base}.{fmt.value}"; filename*=UTF-8\'\'{quote(filename)}'
+        ),
+    }
     return Response(content=subtitle_text, media_type=media_type, headers=headers)
 
 

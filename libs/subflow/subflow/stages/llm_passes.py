@@ -100,7 +100,7 @@ class GlobalUnderstandingPass(BaseLLMStage):
             raise StageExecutionError(
                 self.name, "Global understanding output must be a JSON object"
             )
-        context["global_context"] = cast(dict[str, Any], result)
+        context["global_context"] = result
         logger.info("llm_global_understanding done")
         return context
 
@@ -169,7 +169,7 @@ class SemanticChunkingPass(BaseLLMStage):
         *,
         target_language: str,
         input_context: dict[str, Any],
-        asr_payload: list[dict],
+        asr_payload: list[dict[str, Any]],
         previous_chunk: SemanticChunk | None = None,
     ) -> str:
         parts = [f"目标语言：{target_language}"]

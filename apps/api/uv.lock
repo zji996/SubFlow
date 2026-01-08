@@ -610,8 +610,10 @@ dependencies = [
     { name = "boto3" },
     { name = "httpx" },
     { name = "imageio-ffmpeg" },
+    { name = "psycopg", extra = ["binary"] },
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "redis" },
     { name = "tenacity" },
 ]
 
@@ -620,8 +622,10 @@ requires-dist = [
     { name = "boto3", specifier = ">=1.35" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "imageio-ffmpeg", specifier = ">=0.6.0" },
+    { name = "psycopg", extras = ["binary"], specifier = ">=3.2" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pydantic-settings", specifier = ">=2.0" },
+    { name = "redis", specifier = ">=5.0" },
     { name = "tenacity", specifier = ">=8.0" },
 ]
 

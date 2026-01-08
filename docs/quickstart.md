@@ -114,22 +114,25 @@ curl "http://localhost:8100/projects/<project_id>"
 curl "http://localhost:8100/projects/<project_id>/subtitles/preview?format=srt&content=both"
 ```
 
-### 5) 查看本地 artifacts（可选）
+### 5) 查看 artifacts / 工作文件（可选）
 
-本地开发默认使用 `LocalArtifactStore`，产物落在 `DATA_DIR/projects/<project_id>/...`（默认 `./data/projects/...`）：
+Artifacts（JSON/字幕等小文件）默认走 MinIO/S3（`ARTIFACT_STORE_BACKEND=s3`），API 可直接读取：
 
 ```bash
-ls -R ./data/projects/<project_id> | head
+curl "http://localhost:8100/projects/<project_id>/artifacts/export/subtitles.srt"
 ```
 
-常见文件：
+工作文件（输入视频、`audio.wav`、`vocals.wav` 等大文件）默认保留本地：
 
-- `audio_preprocess/`：`vocals.wav` 等
-- `vad/`：`vad_segments.json`、`vad_regions.json`
-- `asr/`：`asr_segments.json`、`asr_merged_chunks.json`、`full_transcript.txt`
-- `llm_asr_correction/`：`asr_corrected_segments.json`
-- `llm/`：`global_context.json`、`semantic_chunks.json`
-- `export/`：`subtitles.srt`
+- 项目工作目录：`DATA_DIR/projects/<project_id>/`
+- 内容寻址 blobs：`DATA_DIR/blobs/<hash[:2]>/<hash[2:4]>/<hash>`
+
+如需清理无引用 blobs（`ref_count=0`）：
+
+```bash
+uv run --project apps/worker scripts/gc_blobs.py --dry-run
+uv run --project apps/worker scripts/gc_blobs.py
+```
 
 ## 跑通一次（Web UI 方式）
 

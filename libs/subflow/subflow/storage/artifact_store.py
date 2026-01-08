@@ -21,6 +21,17 @@ class ArtifactStore(ABC):
     async def list(self, project_id: str, stage: str | None = None) -> list[str]:
         """List artifact identifiers."""
 
+    async def get_presigned_url(
+        self,
+        project_id: str,
+        stage: str,
+        name: str,
+        *,
+        expires_in: int,
+    ) -> str | None:
+        """Return a presigned download URL when supported by the backend."""
+        return None
+
     async def save_text(self, project_id: str, stage: str, name: str, text: str) -> str:
         return await self.save(project_id, stage, name, text.encode("utf-8"))
 

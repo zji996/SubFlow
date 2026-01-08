@@ -129,3 +129,25 @@ class S3ArtifactStore(ArtifactStore):
 
         return await asyncio.to_thread(_list)
 
+    async def get_presigned_url(
+        self,
+        project_id: str,
+        stage: str,
+        name: str,
+        *,
+        expires_in: int,
+    ) -> str:
+        client = self._ensure_client()
+        await self._ensure_bucket()
+        key = self._key(project_id, stage, name)
+
+        def _gen() -> str:
+            return str(
+                client.generate_presigned_url(
+                    "get_object",
+                    Params={"Bucket": self.bucket, "Key": key},
+                    ExpiresIn=max(1, int(expires_in)),
+                )
+            )
+
+        return await asyncio.to_thread(_gen)

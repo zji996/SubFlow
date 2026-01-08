@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
+from collections.abc import Awaitable, Callable
 
 from subflow.config import Settings
-from subflow.exceptions import StageExecutionError
+from subflow.error_codes import ErrorCode
+from subflow.exceptions import ConfigurationError, ProviderError, StageExecutionError
 from subflow.models.serializers import (
     deserialize_asr_corrected_segments,
     deserialize_asr_merged_chunks,
@@ -28,6 +30,8 @@ from subflow.storage.artifact_store import ArtifactStore
 
 logger = logging.getLogger(__name__)
 
+ProjectUpdateHook = Callable[[Project], Awaitable[None]]
+
 
 _STAGE_ORDER: list[StageName] = [
     StageName.AUDIO_PREPROCESS,
@@ -44,9 +48,52 @@ _STAGE_INDEX: dict[StageName, int] = {s: i + 1 for i, s in enumerate(_STAGE_ORDE
 class PipelineOrchestrator:
     """Project-first orchestrator with artifact persistence."""
 
-    def __init__(self, settings: Settings, store: ArtifactStore) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        store: ArtifactStore,
+        *,
+        on_project_update: ProjectUpdateHook | None = None,
+    ) -> None:
         self.settings = settings
         self.store = store
+        self._on_project_update = on_project_update
+
+    async def _notify_update(self, project: Project) -> None:
+        if self._on_project_update is not None:
+            await self._on_project_update(project)
+
+    @staticmethod
+    def _infer_error_code(stage: StageName, exc: BaseException) -> str:
+        if isinstance(exc, StageExecutionError) and exc.error_code is not None:
+            return str(exc.error_code)
+        if isinstance(exc, ProviderError) and exc.error_code is not None:
+            return str(exc.error_code)
+        if isinstance(exc, ConfigurationError):
+            return ErrorCode.INVALID_MEDIA.value
+
+        if stage == StageName.AUDIO_PREPROCESS:
+            return ErrorCode.AUDIO_PREPROCESS_FAILED.value
+        if stage == StageName.VAD:
+            return ErrorCode.VAD_FAILED.value
+        if stage == StageName.ASR:
+            return ErrorCode.ASR_FAILED.value
+        if stage in {StageName.LLM_ASR_CORRECTION, StageName.LLM}:
+            msg = str(exc).lower()
+            if "timeout" in msg or "timed out" in msg:
+                return ErrorCode.LLM_TIMEOUT.value
+            return ErrorCode.LLM_FAILED.value
+        if stage == StageName.EXPORT:
+            return ErrorCode.EXPORT_FAILED.value
+        return ErrorCode.UNKNOWN.value
+
+    @staticmethod
+    def _infer_error_message(exc: BaseException) -> str:
+        if isinstance(exc, StageExecutionError):
+            return str(exc.message or "")
+        if isinstance(exc, ProviderError):
+            return str(exc.message or "")
+        return str(exc)
 
     def _base_context(self, project: Project) -> PipelineContext:
         return {
@@ -171,7 +218,10 @@ class PipelineOrchestrator:
 
             run = StageRun(stage=stage_name, status=StageRunStatus.RUNNING)
             run.started_at = run.started_at or datetime.now(tz=timezone.utc)
+            run.progress = 0
+            run.progress_message = "running"
             project.stage_runs.append(run)
+            await self._notify_update(project)
 
             try:
                 logger.info("stage start (project_id=%s, stage=%s)", project.id, stage_name.value)
@@ -185,25 +235,48 @@ class PipelineOrchestrator:
                     ctx=ctx,
                 )
                 project.artifacts[stage_name.value] = artifacts
+                run.output_artifacts = dict(artifacts)
 
                 project.current_stage = idx
                 run.status = StageRunStatus.COMPLETED
                 run.completed_at = datetime.now(tz=timezone.utc)
-                logger.info("stage done (project_id=%s, stage=%s)", project.id, stage_name.value)
+                if run.started_at is not None and run.completed_at is not None:
+                    run.duration_ms = int((run.completed_at - run.started_at).total_seconds() * 1000)
+                run.progress = 100
+                run.progress_message = "completed"
+                logger.info(
+                    "stage done (project_id=%s, stage=%s, duration_ms=%s)",
+                    project.id,
+                    stage_name.value,
+                    run.duration_ms,
+                )
+                await self._notify_update(project)
 
             except Exception as exc:
                 logger.exception("stage failed (project_id=%s, stage=%s)", project.id, stage_name.value)
                 run.status = StageRunStatus.FAILED
                 run.completed_at = datetime.now(tz=timezone.utc)
+                if run.started_at is not None and run.completed_at is not None:
+                    run.duration_ms = int((run.completed_at - run.started_at).total_seconds() * 1000)
+                run.error_code = self._infer_error_code(stage_name, exc)
+                run.error_message = self._infer_error_message(exc)
                 run.error = str(exc)
+                run.progress_message = "failed"
                 project.status = ProjectStatus.FAILED
+                await self._notify_update(project)
                 if isinstance(exc, StageExecutionError):
                     raise StageExecutionError(
                         exc.stage,
                         exc.message,
                         project_id=project.id,
+                        error_code=exc.error_code,
                     ) from exc
-                raise StageExecutionError(stage_name.value, str(exc), project_id=project.id) from exc
+                raise StageExecutionError(
+                    stage_name.value,
+                    str(exc),
+                    project_id=project.id,
+                    error_code=run.error_code,
+                ) from exc
 
         if project.current_stage >= _STAGE_INDEX[StageName.EXPORT]:
             project.status = ProjectStatus.COMPLETED

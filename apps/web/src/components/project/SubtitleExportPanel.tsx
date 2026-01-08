@@ -1,0 +1,205 @@
+import { useState } from 'react'
+
+import {
+    getDownloadSubtitlesUrl,
+    type ContentMode,
+    type ExportFormat,
+    type PrimaryPosition,
+} from '../../api/subtitles'
+
+interface SubtitleExportPanelProps {
+    projectId: string
+    hasLLMCompleted: boolean
+}
+
+const formatOptions: { value: ExportFormat; label: string; description: string; icon: string }[] = [
+    { value: 'srt', label: 'SRT', description: '最通用，兼容所有播放器', icon: '📄' },
+    { value: 'vtt', label: 'WebVTT', description: '网页播放器推荐', icon: '🌐' },
+    { value: 'ass', label: 'ASS', description: '支持高级样式（字体、颜色）', icon: '🎨' },
+    { value: 'json', label: 'JSON', description: '程序化处理', icon: '⚙️' },
+]
+
+const contentOptions: { value: ContentMode; label: string; description: string }[] = [
+    { value: 'both', label: '双语字幕', description: '同时显示翻译和原文' },
+    { value: 'primary_only', label: '仅翻译', description: '只显示翻译文本' },
+    { value: 'secondary_only', label: '仅原文', description: '只显示原始语言文本' },
+]
+
+const positionOptions: { value: PrimaryPosition; label: string; description: string }[] = [
+    { value: 'top', label: '翻译在上', description: '翻译显示在第一行' },
+    { value: 'bottom', label: '翻译在下', description: '原文显示在第一行' },
+]
+
+export function SubtitleExportPanel({ projectId, hasLLMCompleted }: SubtitleExportPanelProps) {
+    const [format, setFormat] = useState<ExportFormat>('srt')
+    const [content, setContent] = useState<ContentMode>('both')
+    const [position, setPosition] = useState<PrimaryPosition>('top')
+    const [isDownloading, setIsDownloading] = useState(false)
+
+    const downloadHref = getDownloadSubtitlesUrl(projectId, {
+        format,
+        content,
+        primary_position: position,
+    })
+
+    const handleDownload = async () => {
+        setIsDownloading(true)
+        // Using native link download - just need to trigger it
+        const link = document.createElement('a')
+        link.href = downloadHref
+        document.body.appendChild(link)
+        link.click()
+        document.body.removeChild(link)
+        setTimeout(() => setIsDownloading(false), 1000)
+    }
+
+    if (!hasLLMCompleted) {
+        return (
+            <div className="glass-card p-6 mt-8">
+                <div className="flex items-center gap-3 mb-4">
+                    <div className="w-10 h-10 rounded-xl bg-[--color-bg-hover] flex items-center justify-center">
+                        <svg className="w-5 h-5 text-[--color-text-muted]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                        </svg>
+                    </div>
+                    <div>
+                        <h3 className="text-lg font-semibold">字幕导出</h3>
+                        <p className="text-sm text-[--color-text-muted]">完成翻译阶段后可导出字幕</p>
+                    </div>
+                </div>
+                <p className="text-sm text-[--color-text-dim]">
+                    请先完成 LLM 翻译阶段（Stage 5）后才能导出字幕。
+                </p>
+            </div>
+        )
+    }
+
+    return (
+        <div className="glass-card p-6 mt-8 animate-fade-in">
+            {/* Header */}
+            <div className="flex items-center gap-3 mb-6">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[--color-primary]/20 to-[--color-accent]/20 flex items-center justify-center">
+                    <svg className="w-5 h-5 text-[--color-primary-light]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                </div>
+                <div>
+                    <h3 className="text-lg font-semibold">字幕导出</h3>
+                    <p className="text-sm text-[--color-text-muted]">选择格式和内容，下载您的字幕文件</p>
+                </div>
+            </div>
+
+            {/* Format Selection */}
+            <div className="mb-6">
+                <label className="block text-sm font-medium mb-3">📑 字幕格式</label>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    {formatOptions.map((opt) => (
+                        <button
+                            key={opt.value}
+                            onClick={() => setFormat(opt.value)}
+                            className={`p-3 rounded-xl border text-left transition-all ${format === opt.value
+                                    ? 'border-[--color-primary] bg-[--color-primary]/10'
+                                    : 'border-[--color-border] hover:border-[--color-border-light] hover:bg-[--color-bg-hover]'
+                                }`}
+                        >
+                            <div className="flex items-center gap-2 mb-1">
+                                <span>{opt.icon}</span>
+                                <span className="font-medium">{opt.label}</span>
+                            </div>
+                            <p className="text-xs text-[--color-text-muted]">{opt.description}</p>
+                        </button>
+                    ))}
+                </div>
+            </div>
+
+            {/* Content Mode */}
+            <div className="mb-6">
+                <label className="block text-sm font-medium mb-3">🔤 字幕内容</label>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    {contentOptions.map((opt) => (
+                        <button
+                            key={opt.value}
+                            onClick={() => setContent(opt.value)}
+                            className={`p-3 rounded-xl border text-left transition-all ${content === opt.value
+                                    ? 'border-[--color-primary] bg-[--color-primary]/10'
+                                    : 'border-[--color-border] hover:border-[--color-border-light] hover:bg-[--color-bg-hover]'
+                                }`}
+                        >
+                            <div className="font-medium mb-1">{opt.label}</div>
+                            <p className="text-xs text-[--color-text-muted]">{opt.description}</p>
+                        </button>
+                    ))}
+                </div>
+            </div>
+
+            {/* Position (only for bilingual) */}
+            {content === 'both' && (
+                <div className="mb-6 animate-fade-in">
+                    <label className="block text-sm font-medium mb-3">↕️ 显示顺序</label>
+                    <div className="grid grid-cols-2 gap-3">
+                        {positionOptions.map((opt) => (
+                            <button
+                                key={opt.value}
+                                onClick={() => setPosition(opt.value)}
+                                className={`p-3 rounded-xl border text-left transition-all ${position === opt.value
+                                        ? 'border-[--color-primary] bg-[--color-primary]/10'
+                                        : 'border-[--color-border] hover:border-[--color-border-light] hover:bg-[--color-bg-hover]'
+                                    }`}
+                            >
+                                <div className="font-medium mb-1">{opt.label}</div>
+                                <p className="text-xs text-[--color-text-muted]">{opt.description}</p>
+                            </button>
+                        ))}
+                    </div>
+                </div>
+            )}
+
+            {/* Preview Summary */}
+            <div className="p-4 rounded-xl bg-[--color-bg]/50 border border-[--color-border] mb-6">
+                <div className="text-sm text-[--color-text-muted] mb-2">导出配置预览</div>
+                <div className="flex flex-wrap gap-2">
+                    <span className="px-2 py-1 rounded-lg bg-[--color-primary]/10 text-[--color-primary-light] text-xs font-medium">
+                        {formatOptions.find(f => f.value === format)?.label}
+                    </span>
+                    <span className="px-2 py-1 rounded-lg bg-[--color-bg-elevated] text-[--color-text-secondary] text-xs">
+                        {contentOptions.find(c => c.value === content)?.label}
+                    </span>
+                    {content === 'both' && (
+                        <span className="px-2 py-1 rounded-lg bg-[--color-bg-elevated] text-[--color-text-secondary] text-xs">
+                            {positionOptions.find(p => p.value === position)?.label}
+                        </span>
+                    )}
+                </div>
+            </div>
+
+            {/* Download Button */}
+            <button
+                onClick={handleDownload}
+                disabled={isDownloading}
+                className="btn-primary w-full py-4 text-base"
+            >
+                {isDownloading ? (
+                    <>
+                        <svg className="w-5 h-5 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        <span>准备下载中...</span>
+                    </>
+                ) : (
+                    <>
+                        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                        </svg>
+                        <span>下载字幕文件</span>
+                    </>
+                )}
+            </button>
+
+            {/* Note */}
+            <p className="mt-4 text-xs text-[--color-text-dim] text-center">
+                字幕将根据您的设置实时生成，无需预先导出
+            </p>
+        </div>
+    )
+}

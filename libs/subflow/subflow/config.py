@@ -189,7 +189,7 @@ class Settings(BaseSettings):
     redis_project_ttl_days: int = Field(default=30, ge=1)
 
     # Artifacts
-    artifact_store_backend: str = "local"  # "local" | "s3"
+    artifact_store_backend: str = "s3"  # "local" | "s3"
 
     # S3/MinIO
     s3_endpoint: str = "http://localhost:9000"

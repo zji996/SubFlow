@@ -1,5 +1,10 @@
 """Provider factory and registry."""
 
+from __future__ import annotations
+
+from typing import Any
+from collections.abc import Mapping
+
 from subflow.exceptions import ConfigurationError
 from subflow.providers.audio.base import AudioProvider
 from subflow.providers.asr.base import ASRProvider
@@ -7,7 +12,7 @@ from subflow.providers.llm.base import LLMProvider
 from subflow.providers.vad.base import VADProvider
 
 
-def get_asr_provider(config: dict) -> ASRProvider:
+def get_asr_provider(config: Mapping[str, Any]) -> ASRProvider:
     """Get ASR provider based on configuration."""
     provider_type = config.get("provider", "glm_asr")
 
@@ -26,7 +31,7 @@ def get_asr_provider(config: dict) -> ASRProvider:
             raise ConfigurationError(f"Unknown ASR provider: {provider_type}")
 
 
-def get_llm_provider(config: dict) -> LLMProvider:
+def get_llm_provider(config: Mapping[str, Any]) -> LLMProvider:
     """Get LLM provider based on configuration."""
     provider_type = config.get("provider", "openai")
 
@@ -43,7 +48,7 @@ def get_llm_provider(config: dict) -> LLMProvider:
             raise ConfigurationError(f"Unknown LLM provider: {provider_type}")
 
 
-def get_vad_provider(config: dict) -> VADProvider:
+def get_vad_provider(config: Mapping[str, Any]) -> VADProvider:
     provider_type = str(config.get("provider", "nemo_marblenet")).strip().lower()
 
     match provider_type:
@@ -66,7 +71,7 @@ def get_vad_provider(config: dict) -> VADProvider:
             raise ConfigurationError(f"Unknown VAD provider: {provider_type}")
 
 
-def get_audio_provider(config: dict) -> AudioProvider:
+def get_audio_provider(config: Mapping[str, Any]) -> AudioProvider:
     provider_type = str(config.get("provider", "ffmpeg_demucs")).strip().lower()
 
     match provider_type:

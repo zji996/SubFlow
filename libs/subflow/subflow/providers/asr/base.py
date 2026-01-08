@@ -53,3 +53,6 @@ class ASRProvider(ABC):
             Transcribed text.
         """
         ...
+
+    async def close(self) -> None:  # pragma: no cover
+        return None

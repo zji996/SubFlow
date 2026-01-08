@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -10,7 +11,9 @@ from redis.asyncio import Redis
 
 from subflow.config import Settings
 from subflow.models.project import Project, ProjectStatus, StageName
-from subflow.services import ProjectStore
+from subflow.services import BlobStore, ProjectStore
+
+logger = logging.getLogger(__name__)
 
 
 class ProjectService:
@@ -78,6 +81,11 @@ class ProjectService:
     async def delete_project(self, project_id: str) -> bool:
         removed = await self.store.delete(project_id)
         await self.redis.srem(self._index_key(), project_id)
+        if removed:
+            try:
+                await BlobStore(self.settings).release_project_files(project_id)
+            except Exception as exc:
+                logger.warning("failed to release blob refs for project %s: %s", project_id, exc)
         return bool(removed)
 
     async def enqueue_run_stage(self, project_id: str, stage: StageName) -> None:

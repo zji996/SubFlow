@@ -209,6 +209,24 @@ status_api() { status_bg "api" "${API_PID}" "${API_LOG}"; }
 status_worker() { status_bg "worker" "${WORKER_PID}" "${WORKER_LOG}"; }
 status_web() { status_bg "web" "${WEB_PID}" "${WEB_LOG}"; }
 
+clean_logs() {
+  local services=("$@")
+  ensure_log_dir
+  for s in "${services[@]}"; do
+    case "${s}" in
+      api)
+        [[ -f "${API_LOG}" ]] && : > "${API_LOG}" && log_info "[api] log cleaned"
+        ;;
+      worker)
+        [[ -f "${WORKER_LOG}" ]] && : > "${WORKER_LOG}" && log_info "[worker] log cleaned"
+        ;;
+      web)
+        [[ -f "${WEB_LOG}" ]] && : > "${WEB_LOG}" && log_info "[web] log cleaned"
+        ;;
+    esac
+  done
+}
+
 logs_cmd() {
   local service="$1"
   local follow="${2}"
@@ -348,6 +366,15 @@ main() {
 
   case "${cmd}" in
     up)
+      # Stop any running services first and clean logs
+      for ((i=${#services[@]}-1; i>=0; i--)); do
+        case "${services[$i]}" in
+          api) stop_api ;;
+          worker) stop_worker ;;
+          web) stop_web ;;
+        esac
+      done
+      clean_logs "${services[@]}"
       check_env
       for s in "${services[@]}"; do
         case "${s}" in
@@ -365,6 +392,7 @@ main() {
           web) stop_web ;;
         esac
       done
+      clean_logs "${services[@]}"
       ;;
     restart)
       "${BASH_SOURCE[0]}" down "${services[@]}" --api-port "${api_port}" --web-port "${web_port}"

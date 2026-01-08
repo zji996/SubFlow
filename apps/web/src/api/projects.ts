@@ -1,6 +1,25 @@
+import { apiRequest, type ApiRequestOptions } from './client'
+
 export type ProjectStatus = 'pending' | 'processing' | 'paused' | 'completed' | 'failed'
 
 export type StageName = 'audio_preprocess' | 'vad' | 'asr' | 'llm_asr_correction' | 'llm' | 'export'
+
+export type StageRunStatus = 'pending' | 'running' | 'completed' | 'failed'
+
+export interface StageRun {
+    stage: StageName
+    status: StageRunStatus
+    started_at?: string | null
+    completed_at?: string | null
+    duration_ms?: number | null
+    progress?: number | null
+    progress_message?: string | null
+    error_code?: string | null
+    error_message?: string | null
+    error?: string | null
+    input_artifacts?: Record<string, string>
+    output_artifacts?: Record<string, string>
+}
 
 export interface Project {
     id: string
@@ -10,8 +29,10 @@ export interface Project {
     target_language: string
     status: ProjectStatus
     current_stage: number
-    artifacts: Record<string, any>
-    stage_runs: Record<string, any>[]
+    artifacts: Record<string, unknown>
+    stage_runs: StageRun[]
+    created_at?: string
+    updated_at?: string
 }
 
 export interface CreateProjectRequest {
@@ -27,54 +48,61 @@ export interface SubtitlePreview {
     content: string
 }
 
-const API_BASE = ''
-
-async function request<T>(url: string, options?: RequestInit): Promise<T> {
-    const response = await fetch(`${API_BASE}${url}`, {
-        ...options,
-        headers: {
-            'Content-Type': 'application/json',
-            ...options?.headers,
-        },
-    })
-
-    if (!response.ok) {
-        const error = await response.json().catch(() => ({ detail: 'Unknown error' }))
-        throw new Error(error.detail || `HTTP ${response.status}`)
+export type ArtifactContentResponse =
+    | {
+        project_id: string
+        stage: StageName
+        name: string
+        kind: 'json'
+        data: unknown
+    }
+    | {
+        project_id: string
+        stage: StageName
+        name: string
+        kind: 'text'
+        data: string
     }
 
-    return response.json()
+export async function createProject(data: CreateProjectRequest, options?: ApiRequestOptions): Promise<Project> {
+    return apiRequest<Project>('/projects', { ...options, method: 'POST', json: data })
 }
 
-export async function createProject(data: CreateProjectRequest): Promise<Project> {
-    return request<Project>('/projects', {
-        method: 'POST',
-        body: JSON.stringify(data),
-    })
+export async function listProjects(options?: ApiRequestOptions): Promise<Project[]> {
+    return apiRequest<Project[]>('/projects', options)
 }
 
-export async function listProjects(): Promise<Project[]> {
-    return request<Project[]>('/projects')
+export async function getProject(id: string, options?: ApiRequestOptions): Promise<Project> {
+    return apiRequest<Project>(`/projects/${id}`, options)
 }
 
-export async function getProject(id: string): Promise<Project> {
-    return request<Project>(`/projects/${id}`)
+export async function runStage(id: string, stage?: StageName, options?: ApiRequestOptions): Promise<Project> {
+    return apiRequest<Project>(`/projects/${id}/run`, { ...options, method: 'POST', json: stage ? { stage } : {} })
 }
 
-export async function runStage(id: string, stage?: StageName): Promise<Project> {
-    return request<Project>(`/projects/${id}/run`, {
-        method: 'POST',
-        body: JSON.stringify(stage ? { stage } : {}),
-    })
+export async function runAll(id: string, options?: ApiRequestOptions): Promise<Project> {
+    return apiRequest<Project>(`/projects/${id}/run-all`, { ...options, method: 'POST', json: {} })
 }
 
-export async function runAll(id: string): Promise<Project> {
-    return request<Project>(`/projects/${id}/run-all`, {
-        method: 'POST',
-        body: JSON.stringify({}),
-    })
+export async function getSubtitles(id: string, options?: ApiRequestOptions): Promise<SubtitlePreview> {
+    return apiRequest<SubtitlePreview>(`/projects/${id}/subtitles`, options)
 }
 
-export async function getSubtitles(id: string): Promise<SubtitlePreview> {
-    return request<SubtitlePreview>(`/projects/${id}/subtitles`)
+export async function deleteProject(
+    id: string,
+    options?: ApiRequestOptions,
+): Promise<{ deleted: boolean; project_id: string }> {
+    return apiRequest<{ deleted: boolean; project_id: string }>(`/projects/${id}`, { ...options, method: 'DELETE' })
+}
+
+export async function getArtifactContent(
+    projectId: string,
+    stage: StageName,
+    artifactName: string,
+    options?: ApiRequestOptions,
+): Promise<ArtifactContentResponse> {
+    return apiRequest<ArtifactContentResponse>(
+        `/projects/${projectId}/artifacts/${stage}/${encodeURIComponent(artifactName)}`,
+        options,
+    )
 }

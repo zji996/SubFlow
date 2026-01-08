@@ -19,22 +19,37 @@ logger = logging.getLogger(__name__)
 
 async def _maybe_upload_export(settings: Settings, project: Project) -> None:
     export = (project.artifacts or {}).get(StageName.EXPORT.value) or {}
-    local_path = export.get("subtitles.srt")
-    if not local_path:
-        return
-
-    try:
-        path = Path(str(local_path))
-        if not path.exists():
-            return
-    except Exception as exc:
-        logger.warning("invalid export path %r: %s", local_path, exc)
+    subtitles_ident = export.get("subtitles.srt")
+    if not subtitles_ident:
         return
 
     if not settings.s3_endpoint or not settings.s3_bucket_name:
         return
 
-    remote_key = f"projects/{project.id}/subtitles.srt"
+    store = get_artifact_store(settings)
+    try:
+        url = await store.get_presigned_url(
+            project.id,
+            StageName.EXPORT.value,
+            "subtitles.srt",
+            expires_in=int(settings.s3_presign_expires_hours) * 3600,
+        )
+        if url:
+            export["subtitles.srt_url"] = url
+            project.artifacts[StageName.EXPORT.value] = export
+            return
+    except Exception as exc:
+        logger.warning("failed to presign subtitles.srt for project %s: %s", project.id, exc)
+
+    try:
+        path = Path(str(subtitles_ident))
+        if not path.exists():
+            return
+    except Exception as exc:
+        logger.warning("invalid export path %r: %s", subtitles_ident, exc)
+        return
+
+    remote_key = f"projects/{project.id}/{StageName.EXPORT.value}/subtitles.srt"
     async with StorageService(
         endpoint=settings.s3_endpoint,
         access_key=settings.s3_access_key,
@@ -42,10 +57,7 @@ async def _maybe_upload_export(settings: Settings, project: Project) -> None:
         bucket=settings.s3_bucket_name,
     ) as storage:
         await storage.upload_file(str(path), remote_key)
-        url = await storage.get_presigned_url(
-            remote_key,
-            expires_in=int(settings.s3_presign_expires_hours) * 3600,
-        )
+        url = await storage.get_presigned_url(remote_key, expires_in=int(settings.s3_presign_expires_hours) * 3600)
         export["subtitles.srt_url"] = url
         project.artifacts[StageName.EXPORT.value] = export
 
@@ -64,7 +76,7 @@ async def process_project_task(task: dict[str, Any], redis: Redis, settings: Set
         return
 
     store = get_artifact_store(settings)
-    orchestrator = PipelineOrchestrator(settings, store=store)
+    orchestrator = PipelineOrchestrator(settings, store=store, on_project_update=project_store.save)
 
     try:
         project.status = ProjectStatus.PROCESSING

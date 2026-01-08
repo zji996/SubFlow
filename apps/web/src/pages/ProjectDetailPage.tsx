@@ -1,8 +1,19 @@
-import { useCallback, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
-import { getProject, getSubtitles, runAll, runStage, type Project, type StageName, type SubtitlePreview } from '../api/projects'
-import { Spinner } from '../components/Spinner'
-import { StatusBadge } from '../components/StatusBadge'
+import { useCallback, useMemo, useState } from 'react'
+import { Link, useNavigate, useParams } from 'react-router-dom'
+import {
+    deleteProject,
+    getArtifactContent,
+    getProject,
+    runAll,
+    runStage,
+    type ArtifactContentResponse,
+    type Project,
+    type StageName,
+    type StageRun,
+} from '../api/projects'
+import { Spinner } from '../components/common/Spinner'
+import { StatusBadge } from '../components/common/StatusBadge'
+import { SubtitleExportPanel } from '../components/project/SubtitleExportPanel'
 import { usePolling } from '../hooks/usePolling'
 
 const stageOrder: { index: number; name: StageName; label: string }[] = [
@@ -21,13 +32,16 @@ function nextStage(currentStage: number): StageName | null {
 
 export default function ProjectDetailPage() {
     const { projectId } = useParams<{ projectId: string }>()
-    const [subtitlePreview, setSubtitlePreview] = useState<SubtitlePreview | null>(null)
-    const [subtitleLoading, setSubtitleLoading] = useState(false)
-    const [subtitleError, setSubtitleError] = useState<string | null>(null)
+    const navigate = useNavigate()
 
-    const fetcher = useCallback(() => {
+    const [expandedStage, setExpandedStage] = useState<StageName | null>(null)
+    const [artifactPreview, setArtifactPreview] = useState<ArtifactContentResponse | null>(null)
+    const [artifactLoading, setArtifactLoading] = useState(false)
+    const [artifactError, setArtifactError] = useState<string | null>(null)
+
+    const fetcher = useCallback((signal: AbortSignal) => {
         if (!projectId) throw new Error('No project ID')
-        return getProject(projectId)
+        return getProject(projectId, { signal })
     }, [projectId])
 
     const { data: project, loading, error } = usePolling<Project>({
@@ -47,19 +61,48 @@ export default function ProjectDetailPage() {
         await runAll(projectId)
     }
 
-    const handleLoadSubtitles = async () => {
+    const handleDelete = async () => {
         if (!projectId) return
-        setSubtitleLoading(true)
-        setSubtitleError(null)
+        if (!window.confirm('确认删除该项目？此操作不可恢复。')) return
+        await deleteProject(projectId)
+        navigate('/projects')
+    }
+
+    const handlePreviewArtifact = async (stage: StageName, name: string) => {
+        if (!projectId) return
+        setArtifactLoading(true)
+        setArtifactError(null)
         try {
-            const preview = await getSubtitles(projectId)
-            setSubtitlePreview(preview)
+            const res = await getArtifactContent(projectId, stage, name)
+            setArtifactPreview(res)
         } catch (err) {
-            setSubtitleError(err instanceof Error ? err.message : 'Failed to load subtitles')
+            setArtifactError(err instanceof Error ? err.message : 'Failed to load artifact')
         } finally {
-            setSubtitleLoading(false)
+            setArtifactLoading(false)
         }
     }
+
+    const latestStageRuns = useMemo(() => {
+        const out = new Map<StageName, StageRun>()
+        if (!project) return out
+        for (const r of project.stage_runs || []) {
+            out.set(r.stage, r)
+        }
+        return out
+    }, [project])
+
+    const formatTime = (iso?: string | null) => {
+        if (!iso) return '-'
+        const dt = new Date(iso)
+        if (Number.isNaN(dt.getTime())) return iso
+        return dt.toLocaleString()
+    }
+
+    // Check if LLM stage is completed
+    const hasLLMCompleted = useMemo(() => {
+        if (!project) return false
+        return project.current_stage >= 5
+    }, [project])
 
     if (loading && !project) {
         return (
@@ -86,115 +129,260 @@ export default function ProjectDetailPage() {
 
     if (!project) return null
 
-    const exportArtifacts = (project.artifacts || {})['export'] || {}
-    const downloadUrl: string | undefined = exportArtifacts['subtitles.srt_url']
-    const localPath: string | undefined = exportArtifacts['subtitles.srt']
-    const hasExport = Boolean(downloadUrl || localPath)
-
     return (
-        <div className="max-w-4xl mx-auto">
+        <div className="animate-fade-in">
+            {/* Back link */}
             <div className="mb-6">
                 <Link
                     to="/projects"
-                    className="text-[--color-text-muted] hover:text-[--color-text] text-sm flex items-center gap-2"
+                    className="inline-flex items-center gap-2 text-[--color-text-muted] hover:text-[--color-text] text-sm transition-colors"
                 >
-                    <span>←</span> 返回项目列表
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                    </svg>
+                    返回项目列表
                 </Link>
             </div>
 
-            <div className="glass-card p-8">
-                <div className="flex items-start justify-between gap-4 mb-8">
-                    <div className="min-w-0">
-                        <h1 className="text-2xl font-bold mb-2 truncate">{project.name}</h1>
-                        <p className="text-sm text-[--color-text-muted] font-mono">{project.id}</p>
-                        <p className="text-sm text-[--color-text-muted] mt-2 truncate">
-                            {project.media_url}
+            {/* Project Header */}
+            <div className="glass-card p-6 mb-8">
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
+                    <div>
+                        <h1 className="text-2xl font-bold text-gradient mb-2">
+                            {project.name || `项目 #${project.id.slice(0, 8)}`}
+                        </h1>
+                        <p className="text-sm text-[--color-text-muted] font-mono">
+                            {project.id}
                         </p>
                     </div>
                     <StatusBadge status={project.status} />
                 </div>
 
-                <div className="grid gap-3 md:grid-cols-2 mb-8">
-                    <div className="p-4 rounded-lg bg-[--color-bg] border border-[--color-border]">
-                        <div className="text-xs text-[--color-text-muted]">source_language</div>
-                        <div className="mt-1 text-sm">{project.source_language || 'auto'}</div>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                    <div className="p-3 rounded-xl bg-[--color-bg]/50 border border-[--color-border]">
+                        <div className="text-xs text-[--color-text-muted] mb-1">源语言</div>
+                        <div className="font-medium">{project.source_language || '自动识别'}</div>
                     </div>
-                    <div className="p-4 rounded-lg bg-[--color-bg] border border-[--color-border]">
-                        <div className="text-xs text-[--color-text-muted]">target_language</div>
-                        <div className="mt-1 text-sm">{project.target_language}</div>
+                    <div className="p-3 rounded-xl bg-[--color-bg]/50 border border-[--color-border]">
+                        <div className="text-xs text-[--color-text-muted] mb-1">目标语言</div>
+                        <div className="font-medium">{project.target_language}</div>
+                    </div>
+                    <div className="p-3 rounded-xl bg-[--color-bg]/50 border border-[--color-border]">
+                        <div className="text-xs text-[--color-text-muted] mb-1">当前阶段</div>
+                        <div className="font-medium">Stage {project.current_stage}/6</div>
+                    </div>
+                    <div className="p-3 rounded-xl bg-[--color-bg]/50 border border-[--color-border]">
+                        <div className="text-xs text-[--color-text-muted] mb-1">更新时间</div>
+                        <div className="font-medium text-sm">{formatTime(project.updated_at)}</div>
                     </div>
                 </div>
 
-                <div className="flex gap-3 mb-10">
+                <div className="p-3 rounded-xl bg-[--color-bg]/50 border border-[--color-border] mb-6">
+                    <div className="text-xs text-[--color-text-muted] mb-1">媒体路径</div>
+                    <div className="font-mono text-sm truncate">{project.media_url}</div>
+                </div>
+
+                {/* Action Buttons */}
+                <div className="flex flex-wrap gap-3">
                     <button onClick={handleRunNext} className="btn-primary">
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                        </svg>
                         执行下一步
                     </button>
                     <button onClick={handleRunAll} className="btn-secondary">
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" />
+                        </svg>
                         执行全部
                     </button>
+                    <button
+                        onClick={handleDelete}
+                        className="btn-danger ml-auto"
+                    >
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                        </svg>
+                        删除项目
+                    </button>
                 </div>
+            </div>
 
+            {/* Stage Pipeline */}
+            <div className="glass-card p-6 mb-8">
+                <h2 className="text-lg font-semibold mb-4">处理流程</h2>
                 <div className="space-y-3">
                     {stageOrder.map((s) => {
-                        const done = project.current_stage >= s.index
-                        const active = project.current_stage + 1 === s.index && project.status === 'processing'
+                        const run = latestStageRuns.get(s.name)
+                        const status = run?.status || 'pending'
+                        const expanded = expandedStage === s.name
+                        const outputArtifacts = run?.output_artifacts || {}
+                        const artifactNames = Object.keys(outputArtifacts)
+
+                        const stageBaseClass =
+                            'border rounded-xl overflow-hidden transition-all border-[--color-border] bg-[rgba(15,23,42,0.4)]'
+                        const stageStateClass =
+                            status === 'completed'
+                                ? 'border-[rgba(16,185,129,0.3)] bg-[rgba(16,185,129,0.05)]'
+                                : status === 'running'
+                                    ? 'border-[rgba(99,102,241,0.4)] bg-[rgba(99,102,241,0.08)] shadow-[var(--shadow-glow-primary)]'
+                                    : status === 'failed'
+                                        ? 'border-[rgba(239,68,68,0.3)] bg-[rgba(239,68,68,0.05)]'
+                                        : ''
+
                         return (
-                            <div
-                                key={s.name}
-                                className={`flex items-center justify-between p-4 rounded-lg border ${done
-                                        ? 'border-green-500/30 bg-green-500/5'
-                                        : active
-                                            ? 'border-indigo-500/30 bg-indigo-500/5'
-                                            : 'border-[--color-border] bg-[--color-bg]'
-                                    }`}
-                            >
-                                <div className="flex items-center gap-3">
-                                    <span>{done ? '✅' : active ? '⏳' : '⏸️'}</span>
-                                    <div>
-                                        <div className="font-medium">{s.label}</div>
-                                        <div className="text-xs text-[--color-text-muted]">{s.name}</div>
+                            <div key={s.name} className={`${stageBaseClass} ${stageStateClass}`}>
+                                <div
+                                    className="flex items-center justify-between px-5 py-4 cursor-pointer transition-colors hover:bg-[--color-bg-hover]"
+                                    onClick={() => setExpandedStage(expanded ? null : s.name)}
+                                >
+                                    <div className="flex items-center gap-3">
+                                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-sm font-medium ${status === 'completed' ? 'bg-[--color-success]/20 text-[--color-success-light]' :
+                                                status === 'running' ? 'bg-[--color-primary]/20 text-[--color-primary-light]' :
+                                                    status === 'failed' ? 'bg-[--color-error]/20 text-[--color-error-light]' :
+                                                        'bg-[--color-bg-hover] text-[--color-text-muted]'
+                                            }`}>
+                                            {status === 'completed' ? '✓' : s.index}
+                                        </div>
+                                        <div>
+                                            <div className="font-medium">{s.label}</div>
+                                            <div className="text-xs text-[--color-text-muted]">{s.name}</div>
+                                        </div>
+                                    </div>
+                                    <div className="flex items-center gap-3">
+                                        <StatusBadge status={status} size="sm" />
+                                        <svg
+                                            className={`w-4 h-4 text-[--color-text-muted] transition-transform ${expanded ? 'rotate-180' : ''}`}
+                                            fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                                        >
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                                        </svg>
                                     </div>
                                 </div>
-                                <div className="text-xs text-[--color-text-muted]">Stage {s.index}</div>
+
+                                {status === 'running' && (
+                                    <div className="px-5 pb-4">
+                                        <div className="progress-bar">
+                                            <div
+                                                className="progress-bar-fill"
+                                                style={{ width: `${Math.max(0, Math.min(100, run?.progress ?? 0))}%` }}
+                                            />
+                                        </div>
+                                        <div className="mt-2 text-xs text-[--color-text-muted]">
+                                            {run?.progress_message || '处理中...'} {typeof run?.progress === 'number' ? `(${run.progress}%)` : ''}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {expanded && (
+                                    <div className="px-5 pt-4 pb-5 border-t border-[--color-border] animate-fade-in">
+                                        <div className="grid gap-3 md:grid-cols-2 text-sm">
+                                            <div className="p-3 rounded-lg bg-[--color-bg]/50 border border-[--color-border]">
+                                                <div className="text-xs text-[--color-text-muted]">开始时间</div>
+                                                <div className="mt-1 text-xs font-mono">{formatTime(run?.started_at)}</div>
+                                            </div>
+                                            <div className="p-3 rounded-lg bg-[--color-bg]/50 border border-[--color-border]">
+                                                <div className="text-xs text-[--color-text-muted]">完成时间</div>
+                                                <div className="mt-1 text-xs font-mono">{formatTime(run?.completed_at)}</div>
+                                            </div>
+                                            <div className="p-3 rounded-lg bg-[--color-bg]/50 border border-[--color-border]">
+                                                <div className="text-xs text-[--color-text-muted]">耗时</div>
+                                                <div className="mt-1 text-xs font-mono">
+                                                    {typeof run?.duration_ms === 'number' ? `${(run.duration_ms / 1000).toFixed(2)}s` : '-'}
+                                                </div>
+                                            </div>
+                                            <div className="p-3 rounded-lg bg-[--color-bg]/50 border border-[--color-border]">
+                                                <div className="text-xs text-[--color-text-muted]">状态</div>
+                                                <div className="mt-1 text-xs font-mono">{status}</div>
+                                            </div>
+
+                                            {status === 'failed' && (
+                                                <div className="md:col-span-2 p-3 rounded-lg bg-[--color-error]/10 border border-[--color-error]/30">
+                                                    <div className="text-xs text-[--color-error-light] font-medium">错误信息</div>
+                                                    <div className="mt-1 text-xs font-mono text-[--color-error-light]">
+                                                        [{run?.error_code || 'UNKNOWN'}] {run?.error_message || run?.error || 'stage failed'}
+                                                    </div>
+                                                </div>
+                                            )}
+
+                                            <div className="md:col-span-2 p-3 rounded-lg bg-[--color-bg]/50 border border-[--color-border]">
+                                                <div className="flex items-center justify-between gap-3 mb-2">
+                                                    <div className="text-xs text-[--color-text-muted]">输出产物</div>
+                                                    <div className="text-xs text-[--color-text-dim]">{artifactNames.length} 个文件</div>
+                                                </div>
+                                                {artifactNames.length === 0 ? (
+                                                    <div className="text-xs text-[--color-text-dim]">暂无</div>
+                                                ) : (
+                                                    <div className="space-y-2">
+                                                        {artifactNames.map((name) => (
+                                                            <div key={name} className="flex items-center justify-between gap-3">
+                                                                <div className="min-w-0">
+                                                                    <div className="text-xs font-mono truncate">{name}</div>
+                                                                </div>
+                                                                <button
+                                                                    className="text-xs text-[--color-primary-light] hover:underline shrink-0"
+                                                                    onClick={(e) => {
+                                                                        e.stopPropagation()
+                                                                        handlePreviewArtifact(s.name, name)
+                                                                    }}
+                                                                    disabled={artifactLoading}
+                                                                >
+                                                                    {artifactLoading ? '加载中...' : '预览'}
+                                                                </button>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         )
                     })}
                 </div>
-
-                {hasExport && (
-                    <div className="mt-10 p-4 rounded-lg border border-[--color-border] bg-[--color-bg]">
-                        <div className="text-sm font-medium mb-2">Export</div>
-                        {downloadUrl ? (
-                            <a className="text-indigo-400 hover:text-indigo-300 text-sm" href={downloadUrl}>
-                                下载字幕（S3 预签名 URL）
-                            </a>
-                        ) : (
-                            <div className="text-xs text-[--color-text-muted] font-mono">{localPath}</div>
-                        )}
-
-                        <div className="mt-4 flex items-center gap-3">
-                            <button onClick={handleLoadSubtitles} className="btn-secondary" disabled={subtitleLoading}>
-                                {subtitleLoading ? '加载中…' : subtitlePreview ? '刷新预览' : '预览字幕'}
-                            </button>
-                            {subtitlePreview && (
-                                <div className="text-xs text-[--color-text-muted]">
-                                    source: <span className="font-mono">{subtitlePreview.source}</span>
-                                </div>
-                            )}
-                        </div>
-
-                        {subtitleError && (
-                            <div className="mt-3 text-sm text-red-400">{subtitleError}</div>
-                        )}
-
-                        {subtitlePreview && (
-                            <pre className="mt-4 max-h-[420px] overflow-auto rounded-lg border border-[--color-border] bg-black/30 p-4 text-xs leading-relaxed whitespace-pre-wrap">
-                                {subtitlePreview.content}
-                            </pre>
-                        )}
-                    </div>
-                )}
             </div>
+
+            {/* Artifact Preview Modal */}
+            {(artifactError || artifactPreview) && (
+                <div className="glass-card p-6 mb-8 animate-fade-in">
+                    <div className="flex items-center justify-between gap-3 mb-4">
+                        <div className="text-lg font-semibold">产物预览</div>
+                        <button
+                            className="btn-icon"
+                            onClick={() => {
+                                setArtifactPreview(null)
+                                setArtifactError(null)
+                            }}
+                        >
+                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                        </button>
+                    </div>
+                    {artifactError && <div className="text-sm text-[--color-error-light]">{artifactError}</div>}
+                    {artifactPreview && (
+                        <>
+                            <div className="text-sm text-[--color-text-muted] mb-3">
+                                {artifactPreview.stage} / {artifactPreview.name}
+                            </div>
+                            <pre className="code-preview">
+                                {artifactPreview.kind === 'json'
+                                    ? JSON.stringify(artifactPreview.data, null, 2).slice(0, 20000)
+                                    : artifactPreview.data.slice(0, 20000)}
+                            </pre>
+                        </>
+                    )}
+                </div>
+            )}
+
+            {/* Subtitle Export Panel */}
+            {projectId && (
+                <SubtitleExportPanel
+                    projectId={projectId}
+                    hasLLMCompleted={hasLLMCompleted}
+                />
+            )}
         </div>
     )
 }
