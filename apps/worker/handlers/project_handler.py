@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -12,24 +10,8 @@ from redis.asyncio import Redis
 from subflow.config import Settings
 from subflow.models.project import Project, ProjectStatus, StageName
 from subflow.pipeline import PipelineOrchestrator
-from subflow.services import StorageService
+from subflow.services import ProjectStore, StorageService
 from subflow.storage import LocalArtifactStore
-
-
-def _project_key(project_id: str) -> str:
-    return f"subflow:project:{project_id}"
-
-
-async def _get_project(redis: Redis, project_id: str) -> Project | None:
-    raw = await redis.get(_project_key(project_id))
-    if not raw:
-        return None
-    return Project.from_dict(json.loads(raw))
-
-
-async def _save_project(redis: Redis, project: Project) -> None:
-    project.updated_at = datetime.now(tz=timezone.utc)
-    await redis.set(_project_key(project.id), json.dumps(project.to_dict()), ex=30 * 24 * 3600)
 
 
 async def _maybe_upload_export(settings: Settings, project: Project) -> None:
@@ -66,7 +48,8 @@ async def process_project_task(task: dict[str, Any], redis: Redis, settings: Set
     if not project_id:
         return
 
-    project = await _get_project(redis, project_id)
+    project_store = ProjectStore(redis)
+    project = await project_store.get(project_id)
     if project is None:
         return
 
@@ -75,7 +58,7 @@ async def process_project_task(task: dict[str, Any], redis: Redis, settings: Set
 
     try:
         project.status = ProjectStatus.PROCESSING
-        await _save_project(redis, project)
+        await project_store.save(project)
 
         typ = str(task.get("type", "")).strip()
         if typ == "run_all":
@@ -94,14 +77,14 @@ async def process_project_task(task: dict[str, Any], redis: Redis, settings: Set
                 start_index = max(0, stage_order.index(from_stage))
             for s in stage_order[start_index:]:
                 project, _ = await orchestrator.run_stage(project, s)
-                await _save_project(redis, project)
+                await project_store.save(project)
         elif typ == "run_stage":
             stage_raw = task.get("stage")
             if not stage_raw:
                 return
             stage = StageName(str(stage_raw))
             project, _ = await orchestrator.run_stage(project, stage)
-            await _save_project(redis, project)
+            await project_store.save(project)
             if project.auto_workflow and stage != StageName.EXPORT:
                 project, _ = await orchestrator.run_stage(project, StageName.EXPORT)
             elif not project.auto_workflow and project.status == ProjectStatus.PROCESSING:
@@ -110,10 +93,9 @@ async def process_project_task(task: dict[str, Any], redis: Redis, settings: Set
             return
 
         await _maybe_upload_export(settings, project)
-        await _save_project(redis, project)
+        await project_store.save(project)
 
     except Exception as exc:
         project.status = ProjectStatus.FAILED
-        project.updated_at = datetime.now(tz=timezone.utc)
         project.artifacts.setdefault("errors", []).append(str(exc))
-        await _save_project(redis, project)
+        await project_store.save(project)

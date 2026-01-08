@@ -9,15 +9,13 @@ from uuid import uuid4
 from redis.asyncio import Redis
 
 from subflow.models.project import Project, ProjectStatus, StageName
+from subflow.services import ProjectStore
 
 
 class ProjectService:
     def __init__(self, redis: Redis):
         self.redis = redis
-
-    @staticmethod
-    def _project_key(project_id: str) -> str:
-        return f"subflow:project:{project_id}"
+        self.store = ProjectStore(redis)
 
     @staticmethod
     def _index_key() -> str:
@@ -52,9 +50,7 @@ class ProjectService:
             created_at=now,
             updated_at=now,
         )
-        data = project.to_dict()
-
-        await self.redis.set(self._project_key(project_id), json.dumps(data), ex=30 * 24 * 3600)
+        await self.store.save(project)
         await self.redis.sadd(self._index_key(), project_id)
         return project
 
@@ -68,20 +64,14 @@ class ProjectService:
         return projects
 
     async def get_project(self, project_id: str) -> Project | None:
-        raw = await self.redis.get(self._project_key(project_id))
-        if not raw:
-            return None
-        return Project.from_dict(json.loads(raw))
+        return await self.store.get(project_id)
 
     async def save_project(self, project: Project) -> None:
-        project.touch()
-        await self.redis.set(
-            self._project_key(project.id), json.dumps(project.to_dict()), ex=30 * 24 * 3600
-        )
+        await self.store.save(project)
         await self.redis.sadd(self._index_key(), project.id)
 
     async def delete_project(self, project_id: str) -> bool:
-        removed = await self.redis.delete(self._project_key(project_id))
+        removed = await self.store.delete(project_id)
         await self.redis.srem(self._index_key(), project_id)
         return bool(removed)
 

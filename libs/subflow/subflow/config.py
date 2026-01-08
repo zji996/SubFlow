@@ -104,6 +104,7 @@ class AudioConfig(BaseSettings):
         extra="ignore",
     )
 
+    provider: str = "ffmpeg_demucs"
     ffmpeg_bin: str = "ffmpeg"
     demucs_bin: str = "demucs"
     demucs_model: str = "htdemucs_ft"
@@ -120,6 +121,7 @@ class VADConfig(BaseSettings):
         extra="ignore",
     )
 
+    provider: str = "nemo"
     nemo_model_path: str = (
         "./models/modelscope/models/nv-community/Frame_VAD_Multilingual_MarbleNet_v2.0/"
         "frame_vad_multilingual_marblenet_v2.0.nemo"

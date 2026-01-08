@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from pathlib import Path
 from typing import cast
@@ -12,7 +11,7 @@ import httpx
 from subflow.config import Settings
 from subflow.exceptions import ConfigurationError, StageExecutionError
 from subflow.pipeline.context import PipelineContext
-from subflow.providers.audio import DemucsProvider, FFmpegProvider
+from subflow.providers import get_audio_provider
 from subflow.stages.base import Stage
 
 logger = logging.getLogger(__name__)
@@ -23,11 +22,7 @@ class AudioPreprocessStage(Stage):
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self.ffmpeg = FFmpegProvider(ffmpeg_bin=settings.audio.ffmpeg_bin)
-        self.demucs = DemucsProvider(
-            model=settings.audio.demucs_model,
-            demucs_bin=settings.audio.demucs_bin,
-        )
+        self.provider = get_audio_provider(settings.audio.model_dump())
 
     def validate_input(self, context: PipelineContext) -> bool:
         run_id = context.get("project_id") or context.get("job_id")
@@ -73,15 +68,11 @@ class AudioPreprocessStage(Stage):
             else:
                 raise ConfigurationError("Unsupported media_url; provide local path or http(s) url")
 
-        await self.ffmpeg.extract_audio(
-            str(video_path),
-            str(audio_path),
-            max_duration_s=self.settings.audio.max_duration_s,
-        )
+        await self.provider.extract_audio(str(video_path), str(audio_path))
         logger.info("extracted audio to %s", audio_path)
 
         try:
-            vocals_path = await self.demucs.separate_vocals(str(audio_path), str(demucs_out))
+            vocals_path = await self.provider.separate_vocals(str(audio_path), str(demucs_out))
         except Exception as exc:
             logger.exception("demucs separation failed")
             raise StageExecutionError(

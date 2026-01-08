@@ -11,8 +11,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from subflow.providers.vad.base import VADProvider
 
-class NemoMarbleNetVADProvider:
+class NemoMarbleNetVADProvider(VADProvider):
     def __init__(
         self,
         *,

@@ -10,7 +10,7 @@ from subflow.config import Settings
 from subflow.exceptions import StageExecutionError
 from subflow.models.segment import VADSegment
 from subflow.pipeline.context import PipelineContext
-from subflow.providers.vad import NemoMarbleNetVADProvider
+from subflow.providers import get_vad_provider
 from subflow.stages.base import Stage
 
 logger = logging.getLogger(__name__)
@@ -21,26 +21,14 @@ class VADStage(Stage):
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self.provider_name = "nemo"
-        self.provider = NemoMarbleNetVADProvider(
-            model_path=settings.vad.nemo_model_path,
-            threshold=settings.vad.threshold,
-            min_silence_duration_ms=settings.vad.min_silence_duration_ms,
-            min_speech_duration_ms=settings.vad.min_speech_duration_ms,
-            target_max_segment_s=settings.vad.target_max_segment_s,
-            split_threshold=settings.vad.split_threshold,
-            split_search_backtrack_ratio=settings.vad.split_search_backtrack_ratio,
-            split_search_forward_ratio=settings.vad.split_search_forward_ratio,
-            split_gap_s=settings.vad.split_gap_s,
-            device=settings.vad.nemo_device,
-        )
+        self.provider_name = str(settings.vad.provider or "nemo_marblenet")
+        self.provider = get_vad_provider(settings.vad.model_dump())
 
     def validate_input(self, context: PipelineContext) -> bool:
         return bool(context.get("vocals_audio_path"))
 
     async def execute(self, context: PipelineContext) -> PipelineContext:
         audio_path = str(context["vocals_audio_path"])
-        # NeMo is the only supported VAD backend now; errors should be explicit.
         logger.info("vad start (audio_path=%s)", audio_path)
         try:
             timestamps = self.provider.detect(audio_path)

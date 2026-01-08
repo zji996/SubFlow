@@ -10,15 +10,12 @@ from subflow.exceptions import ConfigurationError, StageExecutionError
 from subflow.stages.audio_preprocess import AudioPreprocessStage
 
 
-class _DummyFFmpeg:
-    async def extract_audio(self, video_path: str, output_path: str, max_duration_s=None) -> str:  # type: ignore[override]
+class _DummyAudioProvider:
+    async def extract_audio(self, input_path: str, output_path: str) -> None:  # noqa: ARG002
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
         Path(output_path).write_bytes(b"")
-        return str(output_path)
 
-
-class _DummyDemucs:
-    async def separate_vocals(self, audio_path: str, output_dir: str) -> str:  # type: ignore[override]
+    async def separate_vocals(self, audio_path: str, output_dir: str) -> str:  # noqa: ARG002
         Path(output_dir).mkdir(parents=True, exist_ok=True)
         out = Path(output_dir) / "vocals.wav"
         out.write_bytes(b"")
@@ -89,8 +86,7 @@ async def test_audio_preprocess_uses_existing_video_path(tmp_path) -> None:
         models_dir=str(tmp_path / "models"),
     )
     stage = AudioPreprocessStage(settings)
-    stage.ffmpeg = _DummyFFmpeg()  # type: ignore[assignment]
-    stage.demucs = _DummyDemucs()  # type: ignore[assignment]
+    stage.provider = _DummyAudioProvider()  # type: ignore[assignment]
 
     local_video = tmp_path / "video.mp4"
     local_video.write_bytes(b"")
@@ -106,4 +102,3 @@ async def test_audio_preprocess_uses_existing_video_path(tmp_path) -> None:
     assert out["video_path"] == str(local_video)
     assert Path(out["audio_path"]).exists()
     assert Path(out["vocals_audio_path"]).exists()
-

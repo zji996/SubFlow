@@ -6,6 +6,7 @@ from subflow.config import Settings
 from subflow.models.project import Project, StageName
 from subflow.models.segment import ASRCorrectedSegment, ASRMergedChunk, ASRSegment, VADSegment
 from subflow.pipeline.orchestrator import PipelineOrchestrator
+from subflow.pipeline.stage_runners import RUNNERS
 from subflow.storage.artifact_store import LocalArtifactStore
 
 
@@ -17,34 +18,38 @@ async def test_orchestrator_runs_up_to_target_stage(tmp_path, monkeypatch) -> No
     )
     store = LocalArtifactStore(str(tmp_path / "store"))
 
-    class _AudioStage:
-        name = "audio_preprocess"
-
-        def __init__(self, settings: Settings):  # noqa: ARG002
-            pass
-
-        async def execute(self, ctx):
+    class _AudioRunner:
+        async def run(self, *, settings: Settings, store, project, ctx):  # noqa: ARG002
             out = dict(ctx)
             out["video_path"] = str(tmp_path / "input.mp4")
             out["audio_path"] = str(tmp_path / "audio.wav")
             out["vocals_audio_path"] = str(tmp_path / "vocals.wav")
-            return out
+            ident = await store.save_json(
+                project.id,
+                StageName.AUDIO_PREPROCESS.value,
+                "stage1.json",
+                {
+                    "video_path": out["video_path"],
+                    "audio_path": out["audio_path"],
+                    "vocals_audio_path": out["vocals_audio_path"],
+                },
+            )
+            return out, {"stage1.json": ident}
 
-    class _VADStage:
-        name = "vad"
-
-        def __init__(self, settings: Settings):  # noqa: ARG002
-            pass
-
-        async def execute(self, ctx):
+    class _VADRunner:
+        async def run(self, *, settings: Settings, store, project, ctx):  # noqa: ARG002
             out = dict(ctx)
             out["vad_segments"] = [VADSegment(start=0.0, end=1.0)]
-            return out
+            ident = await store.save_json(
+                project.id,
+                StageName.VAD.value,
+                "vad_segments.json",
+                [{"start": 0.0, "end": 1.0}],
+            )
+            return out, {"vad_segments.json": ident}
 
-    import subflow.pipeline.orchestrator as orch_mod
-
-    monkeypatch.setattr(orch_mod, "AudioPreprocessStage", _AudioStage)
-    monkeypatch.setattr(orch_mod, "VADStage", _VADStage)
+    monkeypatch.setitem(RUNNERS, StageName.AUDIO_PREPROCESS, _AudioRunner())
+    monkeypatch.setitem(RUNNERS, StageName.VAD, _VADRunner())
 
     project = Project(id="p1", name="n", media_url=str(tmp_path / "x.mp4"))
     orchestrator = PipelineOrchestrator(settings, store=store)
@@ -104,38 +109,45 @@ async def test_orchestrator_runs_llm_asr_correction_stage(tmp_path, monkeypatch)
     )
     store = LocalArtifactStore(str(tmp_path / "store"))
 
-    class _AudioStage:
-        name = "audio_preprocess"
-
-        def __init__(self, settings: Settings):  # noqa: ARG002
-            pass
-
-        async def execute(self, ctx):
+    class _AudioRunner:
+        async def run(self, *, settings: Settings, store, project, ctx):  # noqa: ARG002
             out = dict(ctx)
             out["video_path"] = str(tmp_path / "input.mp4")
             out["audio_path"] = str(tmp_path / "audio.wav")
             out["vocals_audio_path"] = str(tmp_path / "vocals.wav")
-            return out
+            ident = await store.save_json(
+                project.id,
+                StageName.AUDIO_PREPROCESS.value,
+                "stage1.json",
+                {
+                    "video_path": out["video_path"],
+                    "audio_path": out["audio_path"],
+                    "vocals_audio_path": out["vocals_audio_path"],
+                },
+            )
+            return out, {"stage1.json": ident}
 
-    class _VADStage:
-        name = "vad"
-
-        def __init__(self, settings: Settings):  # noqa: ARG002
-            pass
-
-        async def execute(self, ctx):
+    class _VADRunner:
+        async def run(self, *, settings: Settings, store, project, ctx):  # noqa: ARG002
             out = dict(ctx)
             out["vad_segments"] = [VADSegment(start=0.0, end=1.0)]
             out["vad_regions"] = [VADSegment(start=0.0, end=1.0)]
-            return out
+            seg_ident = await store.save_json(
+                project.id,
+                StageName.VAD.value,
+                "vad_segments.json",
+                [{"start": 0.0, "end": 1.0}],
+            )
+            reg_ident = await store.save_json(
+                project.id,
+                StageName.VAD.value,
+                "vad_regions.json",
+                [{"start": 0.0, "end": 1.0}],
+            )
+            return out, {"vad_segments.json": seg_ident, "vad_regions.json": reg_ident}
 
-    class _ASRStage:
-        name = "asr"
-
-        def __init__(self, settings: Settings):  # noqa: ARG002
-            pass
-
-        async def execute(self, ctx):
+    class _ASRRunner:
+        async def run(self, *, settings: Settings, store, project, ctx):  # noqa: ARG002
             out = dict(ctx)
             out["asr_segments"] = [ASRSegment(id=0, start=0.0, end=1.0, text="hello", language="en")]
             out["full_transcript"] = "hello"
@@ -149,27 +161,52 @@ async def test_orchestrator_runs_llm_asr_correction_stage(tmp_path, monkeypatch)
                     text="hello",
                 )
             ]
-            return out
+            asr_ident = await store.save_json(
+                project.id,
+                StageName.ASR.value,
+                "asr_segments.json",
+                [{"id": 0, "start": 0.0, "end": 1.0, "text": "hello", "language": "en"}],
+            )
+            merged_ident = await store.save_json(
+                project.id,
+                StageName.ASR.value,
+                "asr_merged_chunks.json",
+                [
+                    {
+                        "region_id": 0,
+                        "chunk_id": 0,
+                        "start": 0.0,
+                        "end": 1.0,
+                        "segment_ids": [0],
+                        "text": "hello",
+                    }
+                ],
+            )
+            transcript_ident = await store.save_text(project.id, StageName.ASR.value, "full_transcript.txt", "hello")
+            return out, {
+                "asr_segments.json": asr_ident,
+                "asr_merged_chunks.json": merged_ident,
+                "full_transcript.txt": transcript_ident,
+            }
 
-    class _CorrectionStage:
-        name = "llm_asr_correction"
-
-        def __init__(self, settings: Settings):  # noqa: ARG002
-            pass
-
-        async def execute(self, ctx):
+    class _CorrectionRunner:
+        async def run(self, *, settings: Settings, store, project, ctx):  # noqa: ARG002
             out = dict(ctx)
             out["asr_corrected_segments"] = {
                 0: ASRCorrectedSegment(id=0, asr_segment_id=0, text="hello"),
             }
-            return out
+            ident = await store.save_json(
+                project.id,
+                StageName.LLM_ASR_CORRECTION.value,
+                "asr_corrected_segments.json",
+                [{"id": 0, "asr_segment_id": 0, "text": "hello"}],
+            )
+            return out, {"asr_corrected_segments.json": ident}
 
-    import subflow.pipeline.orchestrator as orch_mod
-
-    monkeypatch.setattr(orch_mod, "AudioPreprocessStage", _AudioStage)
-    monkeypatch.setattr(orch_mod, "VADStage", _VADStage)
-    monkeypatch.setattr(orch_mod, "ASRStage", _ASRStage)
-    monkeypatch.setattr(orch_mod, "LLMASRCorrectionStage", _CorrectionStage)
+    monkeypatch.setitem(RUNNERS, StageName.AUDIO_PREPROCESS, _AudioRunner())
+    monkeypatch.setitem(RUNNERS, StageName.VAD, _VADRunner())
+    monkeypatch.setitem(RUNNERS, StageName.ASR, _ASRRunner())
+    monkeypatch.setitem(RUNNERS, StageName.LLM_ASR_CORRECTION, _CorrectionRunner())
 
     project = Project(id="p1", name="n", media_url=str(tmp_path / "x.mp4"))
     orchestrator = PipelineOrchestrator(settings, store=store)

@@ -10,7 +10,7 @@ from typing import cast
 from subflow.config import Settings
 from subflow.models.segment import ASRMergedChunk, ASRSegment, VADSegment
 from subflow.pipeline.context import PipelineContext
-from subflow.providers.asr.glm_asr import GLMASRProvider
+from subflow.providers import get_asr_provider
 from subflow.stages.base import Stage
 from subflow.utils.audio import cleanup_segment_files, cut_audio_segments_batch
 from subflow.utils.audio_chunk_merger import (
@@ -28,14 +28,9 @@ class ASRStage(Stage):
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        max_concurrent = max(1, int(settings.concurrency_asr))
-        self.provider = GLMASRProvider(
-            base_url=settings.asr.base_url,
-            model=settings.asr.model,
-            api_key=settings.asr.api_key or "abc123",
-            max_concurrent=max_concurrent,
-            timeout=settings.asr.timeout,
-        )
+        cfg = settings.asr.model_dump()
+        cfg["max_concurrent"] = max(1, int(settings.concurrency_asr))
+        self.provider = get_asr_provider(cfg)
 
     def validate_input(self, context: PipelineContext) -> bool:
         """Check that vocals audio and VAD segments exist."""
