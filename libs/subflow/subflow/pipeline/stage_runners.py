@@ -22,11 +22,10 @@ from subflow.models.segment import (
     SemanticChunk,
     VADSegment,
 )
-from subflow.pipeline.context import PipelineContext
+from subflow.pipeline.context import PipelineContext, ProgressReporter
 from subflow.stages import (
     ASRStage,
     AudioPreprocessStage,
-    ExportStage,
     GlobalUnderstandingPass,
     LLMASRCorrectionStage,
     SemanticChunkingPass,
@@ -58,6 +57,7 @@ class StageRunner(ABC):
         store: ArtifactStore,
         project: Project,
         ctx: PipelineContext,
+        progress_reporter: ProgressReporter | None = None,
     ) -> tuple[PipelineContext, dict[str, str]]:
         raise NotImplementedError
 
@@ -72,10 +72,11 @@ class AudioPreprocessRunner(StageRunner):
         store: ArtifactStore,
         project: Project,
         ctx: PipelineContext,
+        progress_reporter: ProgressReporter | None = None,
     ) -> tuple[PipelineContext, dict[str, str]]:
         stage = AudioPreprocessStage(settings)
         try:
-            ctx = await stage.execute(ctx)
+            ctx = await stage.execute(ctx, progress_reporter)
         finally:
             await _maybe_close(stage)
 
@@ -98,10 +99,11 @@ class VADRunner(StageRunner):
         store: ArtifactStore,
         project: Project,
         ctx: PipelineContext,
+        progress_reporter: ProgressReporter | None = None,
     ) -> tuple[PipelineContext, dict[str, str]]:
         stage = VADStage(settings)
         try:
-            ctx = await stage.execute(ctx)
+            ctx = await stage.execute(ctx, progress_reporter)
         finally:
             await _maybe_close(stage)
 
@@ -137,10 +139,11 @@ class ASRRunner(StageRunner):
         store: ArtifactStore,
         project: Project,
         ctx: PipelineContext,
+        progress_reporter: ProgressReporter | None = None,
     ) -> tuple[PipelineContext, dict[str, str]]:
         stage = ASRStage(settings)
         try:
-            ctx = await stage.execute(ctx)
+            ctx = await stage.execute(ctx, progress_reporter)
         finally:
             await _maybe_close(stage)
 
@@ -181,10 +184,11 @@ class LLMASRCorrectionRunner(StageRunner):
         store: ArtifactStore,
         project: Project,
         ctx: PipelineContext,
+        progress_reporter: ProgressReporter | None = None,
     ) -> tuple[PipelineContext, dict[str, str]]:
         stage = LLMASRCorrectionStage(settings)
         try:
-            ctx = await stage.execute(ctx)
+            ctx = await stage.execute(ctx, progress_reporter)
         finally:
             await _maybe_close(stage)
 
@@ -208,6 +212,7 @@ class LLMRunner(StageRunner):
         store: ArtifactStore,
         project: Project,
         ctx: PipelineContext,
+        progress_reporter: ProgressReporter | None = None,
     ) -> tuple[PipelineContext, dict[str, str]]:
         max_asr = settings.llm_limits.max_asr_segments
         if isinstance(max_asr, int) and max_asr > 0:
@@ -233,13 +238,13 @@ class LLMRunner(StageRunner):
 
         stage1 = GlobalUnderstandingPass(settings)
         try:
-            ctx = await stage1.execute(ctx)
+            ctx = await stage1.execute(ctx, progress_reporter)
         finally:
             await _maybe_close(stage1)
 
         stage2 = SemanticChunkingPass(settings)
         try:
-            ctx = await stage2.execute(ctx)
+            ctx = await stage2.execute(ctx, progress_reporter)
         finally:
             await _maybe_close(stage2)
 
@@ -259,34 +264,10 @@ class LLMRunner(StageRunner):
         return ctx, {"global_context.json": global_ident, "semantic_chunks.json": chunks_ident}
 
 
-class ExportRunner(StageRunner):
-    stage_name = StageName.EXPORT
-
-    async def run(
-        self,
-        *,
-        settings: Settings,
-        store: ArtifactStore,
-        project: Project,
-        ctx: PipelineContext,
-    ) -> tuple[PipelineContext, dict[str, str]]:
-        stage = ExportStage(settings, format="srt")
-        try:
-            ctx = await stage.execute(ctx)
-        finally:
-            await _maybe_close(stage)
-
-        subtitle_text = str(ctx.get("subtitle_text") or "")
-        sub_ident = await store.save_text(project.id, self.stage_name.value, "subtitles.srt", subtitle_text)
-        return ctx, {"subtitles.srt": sub_ident}
-
-
 RUNNERS: dict[StageName, StageRunner] = {
     StageName.AUDIO_PREPROCESS: AudioPreprocessRunner(),
     StageName.VAD: VADRunner(),
     StageName.ASR: ASRRunner(),
     StageName.LLM_ASR_CORRECTION: LLMASRCorrectionRunner(),
     StageName.LLM: LLMRunner(),
-    StageName.EXPORT: ExportRunner(),
 }
-

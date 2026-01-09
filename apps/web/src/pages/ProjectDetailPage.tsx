@@ -22,7 +22,6 @@ const stageOrder: { index: number; name: StageName; label: string }[] = [
     { index: 3, name: 'asr', label: 'ASR 识别' },
     { index: 4, name: 'llm_asr_correction', label: 'LLM ASR 纠错' },
     { index: 5, name: 'llm', label: 'LLM 翻译' },
-    { index: 6, name: 'export', label: '导出字幕' },
 ]
 
 function nextStage(currentStage: number): StageName | null {
@@ -53,7 +52,8 @@ export default function ProjectDetailPage() {
     const handleRunNext = async () => {
         if (!projectId || !project) return
         const s = nextStage(project.current_stage)
-        await runStage(projectId, s || undefined)
+        if (!s) return
+        await runStage(projectId, s)
     }
 
     const handleRunAll = async () => {
@@ -168,8 +168,16 @@ export default function ProjectDetailPage() {
                         <div className="font-medium">{project.target_language}</div>
                     </div>
                     <div className="p-3 rounded-xl bg-[--color-bg]/50 border border-[--color-border]">
-                        <div className="text-xs text-[--color-text-muted] mb-1">当前阶段</div>
-                        <div className="font-medium">Stage {project.current_stage}/6</div>
+                        <div className="text-xs text-[--color-text-muted] mb-1">进度</div>
+                        <div className="font-medium">
+                            {project.status === 'completed' ? (
+                                <span className="text-[--color-success-light]">✓ 已完成</span>
+                            ) : project.status === 'failed' ? (
+                                <span className="text-[--color-error-light]">✗ 失败</span>
+                            ) : (
+                                `${Math.min(project.current_stage, 5)} / 5 阶段`
+                            )}
+                        </div>
                     </div>
                     <div className="p-3 rounded-xl bg-[--color-bg]/50 border border-[--color-border]">
                         <div className="text-xs text-[--color-text-muted] mb-1">更新时间</div>
@@ -183,29 +191,56 @@ export default function ProjectDetailPage() {
                 </div>
 
                 {/* Action Buttons */}
-                <div className="flex flex-wrap gap-3">
-                    <button onClick={handleRunNext} className="btn-primary">
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
-                        </svg>
-                        执行下一步
-                    </button>
-                    <button onClick={handleRunAll} className="btn-secondary">
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" />
-                        </svg>
-                        执行全部
-                    </button>
-                    <button
-                        onClick={handleDelete}
-                        className="btn-danger ml-auto"
-                    >
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                        </svg>
-                        删除项目
-                    </button>
-                </div>
+                {project.status === 'completed' ? (
+                    <div className="flex items-center justify-between gap-4 p-4 rounded-xl bg-[--color-success]/10 border border-[--color-success]/30">
+                        <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 rounded-xl bg-[--color-success]/20 flex items-center justify-center">
+                                <svg className="w-5 h-5 text-[--color-success-light]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                </svg>
+                            </div>
+                            <div>
+                                <div className="font-medium text-[--color-success-light]">处理完成</div>
+                                <div className="text-xs text-[--color-text-muted]">所有阶段已成功完成，可以导出字幕</div>
+                            </div>
+                        </div>
+                        <button onClick={handleDelete} className="btn-danger">
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                            </svg>
+                            删除
+                        </button>
+                    </div>
+                ) : (
+                    <div className="flex flex-wrap gap-3">
+                        <button
+                            onClick={handleRunNext}
+                            disabled={project.status === 'processing'}
+                            className="btn-primary"
+                        >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                            </svg>
+                            {project.status === 'processing' ? '处理中...' : '执行下一步'}
+                        </button>
+                        <button
+                            onClick={handleRunAll}
+                            disabled={project.status === 'processing'}
+                            className="btn-secondary"
+                        >
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" />
+                            </svg>
+                            执行全部
+                        </button>
+                        <button onClick={handleDelete} className="btn-danger ml-auto">
+                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                            </svg>
+                            删除项目
+                        </button>
+                    </div>
+                )}
             </div>
 
             {/* Stage Pipeline */}
@@ -238,9 +273,9 @@ export default function ProjectDetailPage() {
                                 >
                                     <div className="flex items-center gap-3">
                                         <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-sm font-medium ${status === 'completed' ? 'bg-[--color-success]/20 text-[--color-success-light]' :
-                                                status === 'running' ? 'bg-[--color-primary]/20 text-[--color-primary-light]' :
-                                                    status === 'failed' ? 'bg-[--color-error]/20 text-[--color-error-light]' :
-                                                        'bg-[--color-bg-hover] text-[--color-text-muted]'
+                                            status === 'running' ? 'bg-[--color-primary]/20 text-[--color-primary-light]' :
+                                                status === 'failed' ? 'bg-[--color-error]/20 text-[--color-error-light]' :
+                                                    'bg-[--color-bg-hover] text-[--color-text-muted]'
                                             }`}>
                                             {status === 'completed' ? '✓' : s.index}
                                         </div>

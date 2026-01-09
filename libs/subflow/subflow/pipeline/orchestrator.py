@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from datetime import datetime, timezone
 from collections.abc import Awaitable, Callable
 
@@ -24,7 +26,7 @@ from subflow.models.project import (
     StageRunStatus,
 )
 from subflow.models.segment import ASRCorrectedSegment
-from subflow.pipeline.context import PipelineContext
+from subflow.pipeline.context import PipelineContext, ProgressReporter
 from subflow.pipeline.stage_runners import RUNNERS
 from subflow.storage.artifact_store import ArtifactStore
 
@@ -39,10 +41,59 @@ _STAGE_ORDER: list[StageName] = [
     StageName.ASR,
     StageName.LLM_ASR_CORRECTION,
     StageName.LLM,
-    StageName.EXPORT,
 ]
 
 _STAGE_INDEX: dict[StageName, int] = {s: i + 1 for i, s in enumerate(_STAGE_ORDER)}
+
+
+class _StageRunProgressReporter(ProgressReporter):
+    def __init__(
+        self,
+        *,
+        project: Project,
+        stage_run: StageRun,
+        notify_update: Callable[[Project], Awaitable[None]],
+        min_percent_step: int = 5,
+        min_interval_s: float = 2.0,
+    ) -> None:
+        self._project = project
+        self._stage_run = stage_run
+        self._notify_update = notify_update
+        self._min_percent_step = max(1, int(min_percent_step))
+        self._min_interval_s = max(0.0, float(min_interval_s))
+        self._lock = asyncio.Lock()
+        self._last_progress = int(stage_run.progress or 0)
+        self._last_update_at = 0.0
+
+    async def report(self, progress: int, message: str) -> None:
+        pct = int(progress)
+        if pct < 0:
+            pct = 0
+        if pct > 100:
+            pct = 100
+        msg = str(message or "").strip() or "running"
+
+        now = time.monotonic()
+        async with self._lock:
+            if pct < self._last_progress:
+                pct = self._last_progress
+
+            should_emit = False
+            if pct >= 100:
+                should_emit = True
+            elif pct >= self._last_progress + self._min_percent_step:
+                should_emit = True
+            elif self._min_interval_s > 0 and now - self._last_update_at >= self._min_interval_s:
+                should_emit = True
+
+            if not should_emit:
+                return
+
+            self._stage_run.progress = pct
+            self._stage_run.progress_message = msg
+            self._last_progress = pct
+            self._last_update_at = now
+            await self._notify_update(self._project)
 
 
 class PipelineOrchestrator:
@@ -83,8 +134,6 @@ class PipelineOrchestrator:
             if "timeout" in msg or "timed out" in msg:
                 return ErrorCode.LLM_TIMEOUT.value
             return ErrorCode.LLM_FAILED.value
-        if stage == StageName.EXPORT:
-            return ErrorCode.EXPORT_FAILED.value
         return ErrorCode.UNKNOWN.value
 
     @staticmethod
@@ -200,6 +249,8 @@ class PipelineOrchestrator:
         return ctx
 
     async def run_stage(self, project: Project, stage: StageName) -> tuple[Project, PipelineContext]:
+        if stage not in _STAGE_INDEX:
+            raise ValueError(f"Unknown stage: {stage}")
         target_index = _STAGE_INDEX[stage]
         if project.current_stage >= target_index:
             logger.info("orchestrator skip (project_id=%s, stage=%s)", project.id, stage.value)
@@ -228,11 +279,17 @@ class PipelineOrchestrator:
                 runner = RUNNERS.get(stage_name)
                 if runner is None:  # pragma: no cover
                     raise ValueError(f"Unknown stage: {stage_name}")
+                progress_reporter = _StageRunProgressReporter(
+                    project=project,
+                    stage_run=run,
+                    notify_update=self._notify_update,
+                )
                 ctx, artifacts = await runner.run(
                     settings=self.settings,
                     store=self.store,
                     project=project,
                     ctx=ctx,
+                    progress_reporter=progress_reporter,
                 )
                 project.artifacts[stage_name.value] = artifacts
                 run.output_artifacts = dict(artifacts)
@@ -278,12 +335,14 @@ class PipelineOrchestrator:
                     error_code=run.error_code,
                 ) from exc
 
-        if project.current_stage >= _STAGE_INDEX[StageName.EXPORT]:
+        if project.current_stage >= _STAGE_INDEX[StageName.LLM]:
             project.status = ProjectStatus.COMPLETED
 
         return project, ctx
 
     async def run_all(self, project: Project, from_stage: StageName | None = None) -> tuple[Project, PipelineContext]:
         if from_stage is not None:
+            if from_stage not in _STAGE_INDEX:
+                raise ValueError(f"Unknown stage: {from_stage}")
             project.current_stage = min(project.current_stage, _STAGE_INDEX[from_stage] - 1)
-        return await self.run_stage(project, StageName.EXPORT)
+        return await self.run_stage(project, StageName.LLM)

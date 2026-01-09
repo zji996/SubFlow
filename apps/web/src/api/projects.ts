@@ -2,7 +2,7 @@ import { apiRequest, type ApiRequestOptions } from './client'
 
 export type ProjectStatus = 'pending' | 'processing' | 'paused' | 'completed' | 'failed'
 
-export type StageName = 'audio_preprocess' | 'vad' | 'asr' | 'llm_asr_correction' | 'llm' | 'export'
+export type StageName = 'audio_preprocess' | 'vad' | 'asr' | 'llm_asr_correction' | 'llm'
 
 export type StageRunStatus = 'pending' | 'running' | 'completed' | 'failed'
 
@@ -42,12 +42,6 @@ export interface CreateProjectRequest {
     target_language: string
 }
 
-export interface SubtitlePreview {
-    format: 'srt'
-    source: 'local' | 's3'
-    content: string
-}
-
 export type ArtifactContentResponse =
     | {
         project_id: string
@@ -82,10 +76,6 @@ export async function runStage(id: string, stage?: StageName, options?: ApiReque
 
 export async function runAll(id: string, options?: ApiRequestOptions): Promise<Project> {
     return apiRequest<Project>(`/projects/${id}/run-all`, { ...options, method: 'POST', json: {} })
-}
-
-export async function getSubtitles(id: string, options?: ApiRequestOptions): Promise<SubtitlePreview> {
-    return apiRequest<SubtitlePreview>(`/projects/${id}/subtitles`, options)
 }
 
 export async function deleteProject(

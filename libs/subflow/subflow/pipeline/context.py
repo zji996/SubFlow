@@ -6,9 +6,13 @@ defines the stable, known keys to improve type safety and readability.
 
 from __future__ import annotations
 
-from typing import Any, TypedDict
+from typing import Any, Protocol, TypedDict
 
 from subflow.models.segment import ASRCorrectedSegment, ASRMergedChunk, ASRSegment, SemanticChunk, VADSegment
+
+
+class ProgressReporter(Protocol):
+    async def report(self, progress: int, message: str) -> None: ...
 
 
 class PipelineContext(TypedDict, total=False):

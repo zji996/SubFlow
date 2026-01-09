@@ -8,7 +8,7 @@ from typing import Any, cast
 
 from subflow.exceptions import StageExecutionError
 from subflow.models.segment import ASRSegment, SemanticChunk, TranslationChunk
-from subflow.pipeline.context import PipelineContext
+from subflow.pipeline.context import PipelineContext, ProgressReporter
 from subflow.providers.llm import Message
 from subflow.stages.base_llm import BaseLLMStage
 from subflow.utils.tokenizer import truncate_to_tokens, count_tokens
@@ -58,7 +58,11 @@ class GlobalUnderstandingPass(BaseLLMStage):
             "}"
         )
 
-    async def execute(self, context: PipelineContext) -> PipelineContext:
+    async def execute(
+        self,
+        context: PipelineContext,
+        progress_reporter: ProgressReporter | None = None,
+    ) -> PipelineContext:
         context = cast(PipelineContext, dict(context))
         transcript = str(context.get("full_transcript", "")).strip()
 
@@ -334,7 +338,11 @@ class SemanticChunkingPass(BaseLLMStage):
 
         return chunk, next_cursor
 
-    async def execute(self, context: PipelineContext) -> PipelineContext:
+    async def execute(
+        self,
+        context: PipelineContext,
+        progress_reporter: ProgressReporter | None = None,
+    ) -> PipelineContext:
         context = cast(PipelineContext, dict(context))
         asr_segments: list[ASRSegment] = list(context.get("asr_segments", []))
         target_language = str(context.get("target_language", "zh"))
@@ -368,6 +376,7 @@ class SemanticChunkingPass(BaseLLMStage):
         chunk_id = 0
         window_size = self.DEFAULT_WINDOW_SIZE
         input_context = _compact_global_context(context.get("global_context"))
+        total_segments = len(asr_segments)
 
         while cursor < len(asr_segments):
             prev_cursor = cursor
@@ -480,6 +489,11 @@ class SemanticChunkingPass(BaseLLMStage):
             # Safety: prevent infinite loop
             if cursor <= prev_cursor:
                 cursor = prev_cursor + 1
+
+            if progress_reporter and total_segments > 0:
+                processed = min(cursor, total_segments)
+                pct = int(processed / total_segments * 100)
+                await progress_reporter.report(pct, f"翻译中 {processed}/{total_segments} 段")
 
         context["asr_segments"] = asr_segments
         context["asr_segments_index"] = {seg.id: seg for seg in asr_segments}

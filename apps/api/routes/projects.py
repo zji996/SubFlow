@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import datetime
-from pathlib import Path
+import json
+from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import quote
+from uuid import uuid4
 
-import httpx
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field
@@ -17,6 +17,7 @@ from services.project_service import ProjectService
 from subflow.config import Settings
 from subflow.export import SubtitleExporter
 from subflow.export.formatters.base import SubtitleFormatter, selected_lines
+from subflow.models.subtitle_export import SubtitleExport, SubtitleExportSource
 from subflow.models.project import Project, StageName
 from subflow.models.segment import ASRCorrectedSegment, ASRSegment, SemanticChunk
 from subflow.models.serializers import (
@@ -24,7 +25,14 @@ from subflow.models.serializers import (
     deserialize_asr_segments,
     deserialize_semantic_chunks,
 )
-from subflow.models.subtitle_types import AssStyleConfig, SubtitleContent, SubtitleExportConfig, SubtitleFormat
+from subflow.models.subtitle_types import (
+    AssStyleConfig,
+    SubtitleContent,
+    SubtitleEntry,
+    SubtitleExportConfig,
+    SubtitleFormat,
+    TranslationStyle,
+)
 from subflow.storage import get_artifact_store
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -59,12 +67,6 @@ class ProjectResponse(BaseModel):
     updated_at: datetime
 
 
-class SubtitleResponse(BaseModel):
-    format: str = "srt"
-    source: str
-    content: str
-
-
 class SubtitlePreviewEntry(BaseModel):
     index: int
     start: str
@@ -76,6 +78,37 @@ class SubtitlePreviewEntry(BaseModel):
 class SubtitlePreviewResponse(BaseModel):
     entries: list[SubtitlePreviewEntry]
     total: int
+
+
+class CreateSubtitleExportEntry(BaseModel):
+    start: float
+    end: float
+    primary_text: str = ""
+    secondary_text: str = ""
+
+
+class CreateSubtitleExportRequest(BaseModel):
+    format: str = "srt"
+    content: str = "both"
+    primary_position: str = "top"
+    translation_style: str = "per_chunk"
+    ass_style: dict[str, Any] | None = None
+    entries: list[CreateSubtitleExportEntry] | None = None
+
+
+class SubtitleExportResponse(BaseModel):
+    id: str
+    created_at: datetime
+    format: str
+    content_mode: str
+    source: str
+    download_url: str
+
+
+class SubtitleExportDetailResponse(SubtitleExportResponse):
+    config_json: str
+    storage_key: str
+    entries_name: str | None = None
 
 
 def _safe_filename_base(value: str) -> str:
@@ -106,6 +139,37 @@ def _to_response(project: Project) -> ProjectResponse:
         created_at=project.created_at,
         updated_at=project.updated_at,
     )
+
+
+def _export_download_url(project_id: str, export_id: str) -> str:
+    return f"/projects/{project_id}/exports/{export_id}/download"
+
+
+def _export_to_response(project_id: str, exp: SubtitleExport) -> SubtitleExportResponse:
+    return SubtitleExportResponse(
+        id=exp.id,
+        created_at=exp.created_at,
+        format=exp.format.value,
+        content_mode=exp.content_mode.value,
+        source=exp.source.value,
+        download_url=_export_download_url(project_id, exp.id),
+    )
+
+
+def _export_to_detail_response(project_id: str, exp: SubtitleExport) -> SubtitleExportDetailResponse:
+    return SubtitleExportDetailResponse(
+        **_export_to_response(project_id, exp).model_dump(),
+        config_json=exp.config_json,
+        storage_key=exp.storage_key,
+        entries_name=exp.entries_name,
+    )
+
+
+def _find_export(project: Project, export_id: str) -> SubtitleExport | None:
+    for exp in list(project.exports or []):
+        if exp.id == export_id:
+            return exp
+    return None
 
 
 async def _load_subtitle_materials(
@@ -191,6 +255,8 @@ async def run_project(request: Request, project_id: str, payload: RunStageReques
         raise HTTPException(status_code=404, detail="project not found")
 
     stage = payload.stage
+    if stage == StageName.EXPORT:
+        raise HTTPException(status_code=400, detail="export stage has been removed")
     if stage is None:
         next_stage = max(0, int(project.current_stage)) + 1
         stage = {
@@ -199,7 +265,6 @@ async def run_project(request: Request, project_id: str, payload: RunStageReques
             3: StageName.ASR,
             4: StageName.LLM_ASR_CORRECTION,
             5: StageName.LLM,
-            6: StageName.EXPORT,
         }.get(next_stage)
         if stage is None:
             raise HTTPException(status_code=409, detail="project already completed")
@@ -270,15 +335,206 @@ async def get_artifact_content(
         raise HTTPException(status_code=404, detail="artifact not found") from None
 
 
-@router.get("/{project_id}/subtitles", response_model=SubtitleResponse)
-async def get_subtitles(request: Request, project_id: str) -> SubtitleResponse:
+@router.get("/{project_id}/exports", response_model=list[SubtitleExportResponse])
+async def list_exports(request: Request, project_id: str) -> list[SubtitleExportResponse]:
     service = _service(request)
     project = await service.get_project(project_id)
     if project is None:
         raise HTTPException(status_code=404, detail="project not found")
 
-    export: dict[str, Any] = (project.artifacts or {}).get(StageName.EXPORT.value) or {}
-    presigned_url = export.get("subtitles.srt_url")
+    exports = list(project.exports or [])
+
+    def _ts(value: datetime) -> float:
+        try:
+            return float(value.timestamp())
+        except Exception:
+            return 0.0
+
+    exports.sort(key=lambda x: _ts(x.created_at), reverse=True)
+    return [_export_to_response(project_id, exp) for exp in exports]
+
+
+@router.post("/{project_id}/exports", response_model=SubtitleExportDetailResponse)
+async def create_export(
+    request: Request,
+    project_id: str,
+    payload: CreateSubtitleExportRequest,
+) -> SubtitleExportDetailResponse:
+    service = _service(request)
+    project = await service.get_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="project not found")
+
+    if int(project.current_stage) < 5:
+        raise HTTPException(status_code=409, detail="请先完成 LLM 翻译阶段")
+
+    settings: Settings | None = getattr(request.app.state, "settings", None)
+    if settings is None:
+        raise HTTPException(status_code=500, detail="settings not initialized")
+
+    try:
+        fmt = SubtitleFormat(payload.format)
+        content_mode = SubtitleContent(payload.content)
+        translation_style = TranslationStyle(payload.translation_style)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if payload.primary_position not in {"top", "bottom"}:
+        raise HTTPException(status_code=400, detail="primary_position must be 'top' or 'bottom'")
+
+    ass_style: AssStyleConfig | None = None
+    ass_style_dict = payload.ass_style or {}
+    if fmt == SubtitleFormat.ASS:
+        default_style = AssStyleConfig()
+        ass_style = AssStyleConfig(
+            primary_font=str(ass_style_dict.get("primary_font") or default_style.primary_font),
+            primary_size=int(ass_style_dict.get("primary_size") or default_style.primary_size),
+            primary_color=str(ass_style_dict.get("primary_color") or default_style.primary_color),
+            primary_outline_color=str(
+                ass_style_dict.get("primary_outline_color") or default_style.primary_outline_color
+            ),
+            primary_outline_width=int(
+                ass_style_dict.get("primary_outline_width") or default_style.primary_outline_width
+            ),
+            secondary_font=str(ass_style_dict.get("secondary_font") or default_style.secondary_font),
+            secondary_size=int(ass_style_dict.get("secondary_size") or default_style.secondary_size),
+            secondary_color=str(ass_style_dict.get("secondary_color") or default_style.secondary_color),
+            secondary_outline_color=str(
+                ass_style_dict.get("secondary_outline_color") or default_style.secondary_outline_color
+            ),
+            secondary_outline_width=int(
+                ass_style_dict.get("secondary_outline_width") or default_style.secondary_outline_width
+            ),
+            position=str(ass_style_dict.get("position") or default_style.position),
+            margin=int(ass_style_dict.get("margin") or default_style.margin),
+        )
+
+    config = SubtitleExportConfig(
+        format=fmt,
+        content=content_mode,
+        primary_position=payload.primary_position,
+        translation_style=translation_style,
+        ass_style=ass_style,
+    )
+
+    entries_name: str | None = None
+    entries_key: str | None = None
+    source = SubtitleExportSource.AUTO
+
+    if payload.entries:
+        source = SubtitleExportSource.EDITED
+        items: list[tuple[float, float, int, str, str]] = []
+        for i, e in enumerate(payload.entries):
+            start = float(e.start)
+            end = float(e.end)
+            if end < start:
+                start, end = end, start
+            items.append(
+                (
+                    start,
+                    end,
+                    i,
+                    str(e.primary_text or "").strip(),
+                    str(e.secondary_text or "").strip(),
+                )
+            )
+        items.sort(key=lambda x: (x[0], x[1], x[2]))
+        entries: list[SubtitleEntry] = []
+        for idx, (start, end, _, primary, secondary) in enumerate(items, start=1):
+            entries.append(
+                SubtitleEntry(
+                    index=idx,
+                    start=float(start),
+                    end=float(end),
+                    primary_text=primary,
+                    secondary_text=secondary,
+                )
+            )
+        subtitle_text = SubtitleExporter().export_entries(entries, config)
+    else:
+        chunks, asr_segments, corrected = await _load_subtitle_materials(settings, project)
+        if not asr_segments:
+            raise HTTPException(status_code=404, detail="ASR 数据不存在")
+        subtitle_text = SubtitleExporter().export(
+            chunks=chunks,
+            asr_segments=asr_segments,
+            asr_corrected_segments=corrected,
+            config=config,
+        )
+
+    store = get_artifact_store(settings)
+    export_id = f"export_{uuid4().hex}"
+    storage_stage = "exports"
+    storage_name = f"{export_id}.{fmt.value}"
+    storage_key = await store.save_text(project_id, storage_stage, storage_name, subtitle_text)
+
+    if payload.entries:
+        entries_name = f"{export_id}.entries.json"
+        entries_payload = [
+            {
+                "index": int(e.index),
+                "start": float(e.start),
+                "end": float(e.end),
+                "primary_text": str(e.primary_text or ""),
+                "secondary_text": str(e.secondary_text or ""),
+            }
+            for e in entries
+        ]
+        entries_key = await store.save_json(project_id, storage_stage, entries_name, entries_payload)
+
+    config_json = json.dumps(
+        {
+            "format": fmt.value,
+            "content_mode": content_mode.value,
+            "primary_position": payload.primary_position,
+            "translation_style": translation_style.value,
+            "ass_style": ass_style_dict if fmt == SubtitleFormat.ASS else None,
+        },
+        ensure_ascii=False,
+    )
+
+    exp = SubtitleExport(
+        id=export_id,
+        project_id=project_id,
+        created_at=datetime.now(tz=timezone.utc),
+        format=fmt,
+        content_mode=content_mode,
+        config_json=config_json,
+        storage_stage=storage_stage,
+        storage_name=storage_name,
+        storage_key=storage_key,
+        source=source,
+        entries_name=entries_name,
+        entries_key=entries_key,
+    )
+    project.exports.append(exp)
+    await service.save_project(project)
+    return _export_to_detail_response(project_id, exp)
+
+
+@router.get("/{project_id}/exports/{export_id}", response_model=SubtitleExportDetailResponse)
+async def get_export(request: Request, project_id: str, export_id: str) -> SubtitleExportDetailResponse:
+    service = _service(request)
+    project = await service.get_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="project not found")
+
+    exp = _find_export(project, export_id)
+    if exp is None:
+        raise HTTPException(status_code=404, detail="export not found")
+    return _export_to_detail_response(project_id, exp)
+
+
+@router.get("/{project_id}/exports/{export_id}/download")
+async def download_export(request: Request, project_id: str, export_id: str) -> Response:
+    service = _service(request)
+    project = await service.get_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="project not found")
+
+    exp = _find_export(project, export_id)
+    if exp is None:
+        raise HTTPException(status_code=404, detail="export not found")
 
     settings: Settings | None = getattr(request.app.state, "settings", None)
     if settings is None:
@@ -286,41 +542,29 @@ async def get_subtitles(request: Request, project_id: str) -> SubtitleResponse:
 
     store = get_artifact_store(settings)
     try:
-        content = await store.load_text(project_id, StageName.EXPORT.value, "subtitles.srt")
-        backend = str(getattr(settings, "artifact_store_backend", "") or "").strip().lower() or "artifact_store"
-        return SubtitleResponse(source=backend, content=content)
+        data = await store.load(project_id, exp.storage_stage, exp.storage_name)
     except FileNotFoundError:
-        pass
+        raise HTTPException(status_code=404, detail="export file not found") from None
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"failed to load subtitles: {exc}") from exc
+        raise HTTPException(status_code=500, detail=f"failed to load export: {exc}") from exc
 
-    local_path = export.get("subtitles.srt")
-    data_root = Path(settings.data_dir).resolve()
+    media_type = {
+        "srt": "text/plain; charset=utf-8",
+        "vtt": "text/vtt; charset=utf-8",
+        "ass": "text/plain; charset=utf-8",
+        "json": "application/json; charset=utf-8",
+    }.get(exp.format.value, "text/plain; charset=utf-8")
 
-    if local_path:
-        try:
-            path = Path(str(local_path)).expanduser().resolve()
-            if data_root is not None and path != data_root and data_root not in path.parents:
-                raise HTTPException(status_code=400, detail="invalid subtitles path")
-            content = path.read_text(encoding="utf-8", errors="replace")
-            return SubtitleResponse(source="local", content=content)
-        except FileNotFoundError:
-            pass
-        except HTTPException:
-            raise
-        except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"failed to read subtitles: {exc}") from exc
-
-    if presigned_url:
-        try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                resp = await client.get(str(presigned_url))
-                resp.raise_for_status()
-                return SubtitleResponse(source="s3", content=resp.text)
-        except httpx.HTTPError as exc:
-            raise HTTPException(status_code=502, detail=f"failed to fetch subtitles: {exc}") from exc
-
-    raise HTTPException(status_code=404, detail="subtitles not found")
+    base_name = _safe_filename_base(str(project.name or "subtitles"))
+    ascii_base = base_name.encode("ascii", "ignore").decode("ascii") or "subtitles"
+    filename = f"{base_name}_{export_id}.{exp.format.value}"
+    headers = {
+        "Content-Disposition": (
+            f'attachment; filename="{ascii_base}_{export_id}.{exp.format.value}"; '
+            f"filename*=UTF-8''{quote(filename)}"
+        ),
+    }
+    return Response(content=data, media_type=media_type, headers=headers)
 
 
 @router.get("/{project_id}/subtitles/preview", response_model=SubtitlePreviewResponse)

@@ -1,0 +1,125 @@
+from __future__ import annotations
+
+from subflow.models.project import StageName
+from subflow.models.segment import ASRCorrectedSegment, ASRSegment, SemanticChunk, TranslationChunk
+from subflow.models.serializers import (
+    serialize_asr_corrected_segments,
+    serialize_asr_segments,
+    serialize_semantic_chunks,
+)
+from subflow.services.project_store import ProjectStore
+from subflow.storage import get_artifact_store
+
+
+def _set_project_stage(redis, project_id: str, stage: int) -> None:
+    store = ProjectStore(redis, ttl_seconds=3600)
+
+    async def _do() -> None:
+        project = await store.get(project_id)
+        assert project is not None
+        project.current_stage = int(stage)
+        await store.save(project)
+
+    import anyio
+
+    anyio.run(_do)
+
+
+def _seed_subtitle_artifacts(settings, project_id: str) -> None:
+    store = get_artifact_store(settings)
+    asr_segments = [
+        ASRSegment(id=0, start=0.0, end=1.0, text="a", language="en"),
+        ASRSegment(id=1, start=1.0, end=2.0, text="b", language="en"),
+    ]
+    corrected = {
+        0: ASRCorrectedSegment(id=0, asr_segment_id=0, text="A"),
+    }
+    chunks = [
+        SemanticChunk(
+            id=0,
+            text="a b",
+            translation="甲乙",
+            asr_segment_ids=[0, 1],
+            translation_chunks=[
+                TranslationChunk(text="甲", segment_ids=[0]),
+                TranslationChunk(text="乙", segment_ids=[1]),
+            ],
+        )
+    ]
+
+    async def _do() -> None:
+        await store.save_json(project_id, StageName.ASR.value, "asr_segments.json", serialize_asr_segments(asr_segments))
+        await store.save_json(
+            project_id,
+            StageName.LLM_ASR_CORRECTION.value,
+            "asr_corrected_segments.json",
+            serialize_asr_corrected_segments(corrected),
+        )
+        await store.save_json(project_id, StageName.LLM.value, "semantic_chunks.json", serialize_semantic_chunks(chunks))
+
+    import anyio
+
+    anyio.run(_do)
+
+
+def test_exports_create_list_download_from_entries(client, redis, settings) -> None:
+    res = client.post(
+        "/projects",
+        json={"name": "demo", "media_url": "https://example.com/v.mp4", "target_language": "zh"},
+    )
+    pid = res.json()["id"]
+    _set_project_stage(redis, pid, 5)
+
+    res = client.post(
+        f"/projects/{pid}/exports",
+        json={
+            "format": "srt",
+            "content": "both",
+            "primary_position": "top",
+            "translation_style": "per_chunk",
+            "entries": [
+                {"start": 0.0, "end": 1.0, "primary_text": "甲", "secondary_text": "a"},
+            ],
+        },
+    )
+    assert res.status_code == 200
+    export_id = res.json()["id"]
+
+    res = client.get(f"/projects/{pid}/exports")
+    assert res.status_code == 200
+    assert any(x["id"] == export_id for x in res.json())
+
+    res = client.get(f"/projects/{pid}/exports/{export_id}/download")
+    assert res.status_code == 200
+    assert "甲" in res.text
+
+
+def test_exports_create_from_artifacts_and_subtitle_endpoints(client, redis, settings) -> None:
+    res = client.post(
+        "/projects",
+        json={"name": "demo", "media_url": "https://example.com/v.mp4", "target_language": "zh"},
+    )
+    pid = res.json()["id"]
+    _seed_subtitle_artifacts(settings, pid)
+
+    res = client.get(f"/projects/{pid}/subtitles/preview")
+    assert res.status_code == 200
+    payload = res.json()
+    assert payload["total"] == 2
+
+    _set_project_stage(redis, pid, 5)
+
+    res = client.get(f"/projects/{pid}/subtitles/download?format=srt&content=both&primary_position=top")
+    assert res.status_code == 200
+    assert "甲" in res.text
+
+    res = client.post(
+        f"/projects/{pid}/exports",
+        json={"format": "srt", "content": "both", "primary_position": "top", "translation_style": "per_chunk"},
+    )
+    assert res.status_code == 200
+    export_id = res.json()["id"]
+
+    res = client.get(f"/projects/{pid}/exports/{export_id}/download")
+    assert res.status_code == 200
+    assert "甲" in res.text

@@ -19,7 +19,7 @@ async def test_orchestrator_runs_up_to_target_stage(tmp_path, monkeypatch) -> No
     store = LocalArtifactStore(str(tmp_path / "store"))
 
     class _AudioRunner:
-        async def run(self, *, settings: Settings, store, project, ctx):  # noqa: ARG002
+        async def run(self, *, settings: Settings, store, project, ctx, progress_reporter=None):  # noqa: ARG002
             out = dict(ctx)
             out["video_path"] = str(tmp_path / "input.mp4")
             out["audio_path"] = str(tmp_path / "audio.wav")
@@ -37,7 +37,7 @@ async def test_orchestrator_runs_up_to_target_stage(tmp_path, monkeypatch) -> No
             return out, {"stage1.json": ident}
 
     class _VADRunner:
-        async def run(self, *, settings: Settings, store, project, ctx):  # noqa: ARG002
+        async def run(self, *, settings: Settings, store, project, ctx, progress_reporter=None):  # noqa: ARG002
             out = dict(ctx)
             out["vad_segments"] = [VADSegment(start=0.0, end=1.0)]
             ident = await store.save_json(
@@ -110,7 +110,7 @@ async def test_orchestrator_runs_llm_asr_correction_stage(tmp_path, monkeypatch)
     store = LocalArtifactStore(str(tmp_path / "store"))
 
     class _AudioRunner:
-        async def run(self, *, settings: Settings, store, project, ctx):  # noqa: ARG002
+        async def run(self, *, settings: Settings, store, project, ctx, progress_reporter=None):  # noqa: ARG002
             out = dict(ctx)
             out["video_path"] = str(tmp_path / "input.mp4")
             out["audio_path"] = str(tmp_path / "audio.wav")
@@ -128,7 +128,7 @@ async def test_orchestrator_runs_llm_asr_correction_stage(tmp_path, monkeypatch)
             return out, {"stage1.json": ident}
 
     class _VADRunner:
-        async def run(self, *, settings: Settings, store, project, ctx):  # noqa: ARG002
+        async def run(self, *, settings: Settings, store, project, ctx, progress_reporter=None):  # noqa: ARG002
             out = dict(ctx)
             out["vad_segments"] = [VADSegment(start=0.0, end=1.0)]
             out["vad_regions"] = [VADSegment(start=0.0, end=1.0)]
@@ -147,7 +147,7 @@ async def test_orchestrator_runs_llm_asr_correction_stage(tmp_path, monkeypatch)
             return out, {"vad_segments.json": seg_ident, "vad_regions.json": reg_ident}
 
     class _ASRRunner:
-        async def run(self, *, settings: Settings, store, project, ctx):  # noqa: ARG002
+        async def run(self, *, settings: Settings, store, project, ctx, progress_reporter=None):  # noqa: ARG002
             out = dict(ctx)
             out["asr_segments"] = [ASRSegment(id=0, start=0.0, end=1.0, text="hello", language="en")]
             out["full_transcript"] = "hello"
@@ -190,7 +190,7 @@ async def test_orchestrator_runs_llm_asr_correction_stage(tmp_path, monkeypatch)
             }
 
     class _CorrectionRunner:
-        async def run(self, *, settings: Settings, store, project, ctx):  # noqa: ARG002
+        async def run(self, *, settings: Settings, store, project, ctx, progress_reporter=None):  # noqa: ARG002
             out = dict(ctx)
             out["asr_corrected_segments"] = {
                 0: ASRCorrectedSegment(id=0, asr_segment_id=0, text="hello"),

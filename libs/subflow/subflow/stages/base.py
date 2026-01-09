@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from subflow.pipeline.context import PipelineContext
+from subflow.pipeline.context import PipelineContext, ProgressReporter
 
 
 class Stage(ABC):
@@ -13,7 +13,11 @@ class Stage(ABC):
     name: str
 
     @abstractmethod
-    async def execute(self, context: PipelineContext) -> PipelineContext:
+    async def execute(
+        self,
+        context: PipelineContext,
+        progress_reporter: ProgressReporter | None = None,
+    ) -> PipelineContext:
         """执行阶段逻辑，返回更新后的 context"""
 
     @abstractmethod

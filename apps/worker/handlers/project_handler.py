@@ -3,63 +3,17 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from typing import Any
 
 from redis.asyncio import Redis
 
 from subflow.config import Settings
-from subflow.models.project import Project, ProjectStatus, StageName
+from subflow.models.project import ProjectStatus, StageName
 from subflow.pipeline import PipelineOrchestrator
-from subflow.services import ProjectStore, StorageService
+from subflow.services import ProjectStore
 from subflow.storage import get_artifact_store
 
 logger = logging.getLogger(__name__)
-
-
-async def _maybe_upload_export(settings: Settings, project: Project) -> None:
-    export = (project.artifacts or {}).get(StageName.EXPORT.value) or {}
-    subtitles_ident = export.get("subtitles.srt")
-    if not subtitles_ident:
-        return
-
-    if not settings.s3_endpoint or not settings.s3_bucket_name:
-        return
-
-    store = get_artifact_store(settings)
-    try:
-        url = await store.get_presigned_url(
-            project.id,
-            StageName.EXPORT.value,
-            "subtitles.srt",
-            expires_in=int(settings.s3_presign_expires_hours) * 3600,
-        )
-        if url:
-            export["subtitles.srt_url"] = url
-            project.artifacts[StageName.EXPORT.value] = export
-            return
-    except Exception as exc:
-        logger.warning("failed to presign subtitles.srt for project %s: %s", project.id, exc)
-
-    try:
-        path = Path(str(subtitles_ident))
-        if not path.exists():
-            return
-    except Exception as exc:
-        logger.warning("invalid export path %r: %s", subtitles_ident, exc)
-        return
-
-    remote_key = f"projects/{project.id}/{StageName.EXPORT.value}/subtitles.srt"
-    async with StorageService(
-        endpoint=settings.s3_endpoint,
-        access_key=settings.s3_access_key,
-        secret_key=settings.s3_secret_key,
-        bucket=settings.s3_bucket_name,
-    ) as storage:
-        await storage.upload_file(str(path), remote_key)
-        url = await storage.get_presigned_url(remote_key, expires_in=int(settings.s3_presign_expires_hours) * 3600)
-        export["subtitles.srt_url"] = url
-        project.artifacts[StageName.EXPORT.value] = export
 
 
 async def process_project_task(task: dict[str, Any], redis: Redis, settings: Settings) -> None:
@@ -92,11 +46,13 @@ async def process_project_task(task: dict[str, Any], redis: Redis, settings: Set
                 StageName.ASR,
                 StageName.LLM_ASR_CORRECTION,
                 StageName.LLM,
-                StageName.EXPORT,
             ]
             start_index = 0
             if from_stage is not None:
-                start_index = max(0, stage_order.index(from_stage))
+                try:
+                    start_index = max(0, stage_order.index(from_stage))
+                except ValueError:
+                    start_index = 0
             for s in stage_order[start_index:]:
                 project, _ = await orchestrator.run_stage(project, s)
                 await project_store.save(project)
@@ -105,16 +61,16 @@ async def process_project_task(task: dict[str, Any], redis: Redis, settings: Set
             if not stage_raw:
                 return
             stage = StageName(str(stage_raw))
+            if stage == StageName.EXPORT:
+                stage = StageName.LLM
             project, _ = await orchestrator.run_stage(project, stage)
             await project_store.save(project)
-            if project.auto_workflow and stage != StageName.EXPORT:
-                project, _ = await orchestrator.run_stage(project, StageName.EXPORT)
+            if project.auto_workflow and stage != StageName.LLM:
+                project, _ = await orchestrator.run_stage(project, StageName.LLM)
             elif not project.auto_workflow and project.status == ProjectStatus.PROCESSING:
                 project.status = ProjectStatus.PAUSED
         else:
             return
-
-        await _maybe_upload_export(settings, project)
         await project_store.save(project)
 
     except Exception as exc:

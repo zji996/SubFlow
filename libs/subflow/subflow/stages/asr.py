@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import tempfile
 from pathlib import Path
@@ -9,7 +10,7 @@ from typing import cast
 
 from subflow.config import Settings
 from subflow.models.segment import ASRMergedChunk, ASRSegment, VADSegment
-from subflow.pipeline.context import PipelineContext
+from subflow.pipeline.context import PipelineContext, ProgressReporter
 from subflow.providers import get_asr_provider
 from subflow.stages.base import Stage
 from subflow.utils.audio import cleanup_segment_files, cut_audio_segments_batch
@@ -36,7 +37,11 @@ class ASRStage(Stage):
         """Check that vocals audio and VAD segments exist."""
         return bool(context.get("vocals_audio_path")) and bool(context.get("vad_segments"))
 
-    async def execute(self, context: PipelineContext) -> PipelineContext:
+    async def execute(
+        self,
+        context: PipelineContext,
+        progress_reporter: ProgressReporter | None = None,
+    ) -> PipelineContext:
         """Execute ASR on all VAD segments concurrently.
 
         Input context keys:
@@ -61,6 +66,12 @@ class ASRStage(Stage):
             context["full_transcript"] = ""
             return context
 
+        merged_specs = build_merged_chunk_specs(
+            vad_regions,
+            vad_segments,
+            max_chunk_s=float(self.settings.asr.max_chunk_s),
+        )
+
         # Create temp directory for audio segments / merged chunks
         run_id = str(context.get("project_id") or context.get("job_id") or "unknown")
         base_dir = Path(tempfile.gettempdir()) / "subflow" / run_id
@@ -79,12 +90,26 @@ class ASRStage(Stage):
                 ffmpeg_bin=self.settings.audio.ffmpeg_bin,
             )
 
-            # 2. Transcribe all segments concurrently
-            import asyncio
+            total_tasks = len(segment_paths) + len(merged_specs)
+            progress_done = 0
+            progress_lock = asyncio.Lock()
 
+            async def _report_progress(*, done: int, total: int, message: str) -> None:
+                if not progress_reporter or total <= 0:
+                    return
+                pct = int(done / total * 100)
+                await progress_reporter.report(pct, message)
+
+            await _report_progress(
+                done=0,
+                total=total_tasks,
+                message=f"ASR 识别中 0/{max(1, total_tasks)}",
+            )
+
+            # 2. Transcribe all segments concurrently
             semaphore = asyncio.Semaphore(max_concurrent)
 
-            async def _one(path: str) -> str:
+            async def _transcribe_one(path: str) -> str:
                 async with semaphore:
                     try:
                         segs = await self.provider.transcribe(path, language=source_language)
@@ -93,7 +118,21 @@ class ASRStage(Stage):
                         logger.warning("asr error for %s: %s", path, exc)
                         return ""
 
-            texts = list(await asyncio.gather(*[_one(p) for p in segment_paths]))
+            texts: list[str] = [""] * len(segment_paths)
+
+            async def _run_segment(i: int, path: str) -> None:
+                nonlocal progress_done
+                text = await _transcribe_one(path)
+                texts[i] = text
+                async with progress_lock:
+                    progress_done += 1
+                    await _report_progress(
+                        done=progress_done,
+                        total=total_tasks,
+                        message=f"ASR 识别中 {progress_done}/{max(1, total_tasks)}",
+                    )
+
+            await asyncio.gather(*[_run_segment(i, p) for i, p in enumerate(segment_paths)])
 
             # 3. Assemble results with timing
             asr_segments: list[ASRSegment] = []
@@ -116,11 +155,6 @@ class ASRStage(Stage):
             context["source_language"] = source_language
 
             # 5. Region-merged ASR (<=30s chunks per region)
-            merged_specs = build_merged_chunk_specs(
-                vad_regions,
-                vad_segments,
-                max_chunk_s=float(self.settings.asr.max_chunk_s),
-            )
             merged_chunks: list[ASRMergedChunk] = []
             if merged_specs:
                 logger.info(
@@ -135,7 +169,21 @@ class ASRStage(Stage):
                     ffmpeg_bin=self.settings.audio.ffmpeg_bin,
                     max_concurrent=4,
                 )
-                merged_texts = list(await asyncio.gather(*[_one(p) for p in merged_paths]))
+                merged_texts: list[str] = [""] * len(merged_paths)
+
+                async def _run_merged(i: int, path: str) -> None:
+                    nonlocal progress_done
+                    text = await _transcribe_one(path)
+                    merged_texts[i] = text
+                    async with progress_lock:
+                        progress_done += 1
+                        await _report_progress(
+                            done=progress_done,
+                            total=total_tasks,
+                            message=f"ASR 识别中 {progress_done}/{max(1, total_tasks)}",
+                        )
+
+                await asyncio.gather(*[_run_merged(i, p) for i, p in enumerate(merged_paths)])
                 for spec, text in zip(merged_specs, merged_texts):
                     merged_chunks.append(
                         ASRMergedChunk(

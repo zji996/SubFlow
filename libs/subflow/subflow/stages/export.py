@@ -15,7 +15,7 @@ from subflow.models.subtitle_types import (
     SubtitleFormat,
     TranslationStyle,
 )
-from subflow.pipeline.context import PipelineContext
+from subflow.pipeline.context import PipelineContext, ProgressReporter
 from subflow.stages.base import Stage
 
 logger = logging.getLogger(__name__)
@@ -42,7 +42,11 @@ class ExportStage(Stage):
         run_id = context.get("project_id") or context.get("job_id")
         return bool(run_id) and bool(context.get("asr_segments"))
 
-    async def execute(self, context: PipelineContext) -> PipelineContext:
+    async def execute(
+        self,
+        context: PipelineContext,
+        progress_reporter: ProgressReporter | None = None,
+    ) -> PipelineContext:
         context = cast(PipelineContext, dict(context))
         run_id = str(context.get("project_id") or context.get("job_id") or "")
         if not run_id:

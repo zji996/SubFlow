@@ -18,6 +18,24 @@ from subflow.models.subtitle_types import (
 
 
 class SubtitleExporter:
+    def export_entries(self, entries: list[SubtitleEntry], config: SubtitleExportConfig) -> str:
+        if config.primary_position not in {"top", "bottom"}:
+            raise ValueError("primary_position must be 'top' or 'bottom'")
+        if config.content.value not in {"both", "primary_only", "secondary_only"}:
+            raise ValueError("content must be 'both', 'primary_only', or 'secondary_only'")
+
+        match config.format:
+            case SubtitleFormat.SRT:
+                return SRTFormatter().format(entries, config)
+            case SubtitleFormat.VTT:
+                return VTTFormatter().format(entries, config)
+            case SubtitleFormat.ASS:
+                return ASSFormatter().format(entries, config)
+            case SubtitleFormat.JSON:
+                return JSONFormatter().format(entries, config)
+            case _:
+                raise ValueError(f"Unknown subtitle format: {config.format}")
+
     def build_entries(
         self,
         chunks: list[SemanticChunk],
@@ -92,20 +110,4 @@ class SubtitleExporter:
             asr_corrected_segments=asr_corrected_segments,
             translation_style=config.translation_style,
         )
-
-        if config.primary_position not in {"top", "bottom"}:
-            raise ValueError("primary_position must be 'top' or 'bottom'")
-        if config.content.value not in {"both", "primary_only", "secondary_only"}:
-            raise ValueError("content must be 'both', 'primary_only', or 'secondary_only'")
-
-        match config.format:
-            case SubtitleFormat.SRT:
-                return SRTFormatter().format(entries, config)
-            case SubtitleFormat.VTT:
-                return VTTFormatter().format(entries, config)
-            case SubtitleFormat.ASS:
-                return ASSFormatter().format(entries, config)
-            case SubtitleFormat.JSON:
-                return JSONFormatter().format(entries, config)
-            case _:
-                raise ValueError(f"Unknown subtitle format: {config.format}")
+        return self.export_entries(entries, config)

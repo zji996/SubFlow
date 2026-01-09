@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 
 import {
     getDownloadSubtitlesUrl,
@@ -6,6 +6,7 @@ import {
     type ExportFormat,
     type PrimaryPosition,
 } from '../../api/subtitles'
+import { createExport, listExports, type SubtitleExport } from '../../api/exports'
 
 interface SubtitleExportPanelProps {
     projectId: string
@@ -35,12 +36,34 @@ export function SubtitleExportPanel({ projectId, hasLLMCompleted }: SubtitleExpo
     const [content, setContent] = useState<ContentMode>('both')
     const [position, setPosition] = useState<PrimaryPosition>('top')
     const [isDownloading, setIsDownloading] = useState(false)
+    const [exports, setExports] = useState<SubtitleExport[]>([])
+    const [exportsLoading, setExportsLoading] = useState(false)
+    const [exportsError, setExportsError] = useState<string | null>(null)
+    const [isSaving, setIsSaving] = useState(false)
 
     const downloadHref = getDownloadSubtitlesUrl(projectId, {
         format,
         content,
         primary_position: position,
     })
+
+    const refreshExports = useCallback(async () => {
+        setExportsLoading(true)
+        setExportsError(null)
+        try {
+            const items = await listExports(projectId)
+            setExports(items)
+        } catch (err) {
+            setExportsError(err instanceof Error ? err.message : 'Failed to load exports')
+        } finally {
+            setExportsLoading(false)
+        }
+    }, [projectId])
+
+    useEffect(() => {
+        if (!hasLLMCompleted) return
+        void refreshExports()
+    }, [hasLLMCompleted, refreshExports])
 
     const handleDownload = async () => {
         setIsDownloading(true)
@@ -51,6 +74,30 @@ export function SubtitleExportPanel({ projectId, hasLLMCompleted }: SubtitleExpo
         link.click()
         document.body.removeChild(link)
         setTimeout(() => setIsDownloading(false), 1000)
+    }
+
+    const handleSaveExport = async () => {
+        setIsSaving(true)
+        setExportsError(null)
+        try {
+            const exp = await createExport(projectId, {
+                format,
+                content,
+                primary_position: position,
+                translation_style: 'per_chunk',
+            })
+            setExports((prev) => [exp, ...prev.filter((x) => x.id !== exp.id)])
+
+            const link = document.createElement('a')
+            link.href = exp.download_url
+            document.body.appendChild(link)
+            link.click()
+            document.body.removeChild(link)
+        } catch (err) {
+            setExportsError(err instanceof Error ? err.message : 'Failed to create export')
+        } finally {
+            setIsSaving(false)
+        }
     }
 
     if (!hasLLMCompleted) {
@@ -98,8 +145,8 @@ export function SubtitleExportPanel({ projectId, hasLLMCompleted }: SubtitleExpo
                             key={opt.value}
                             onClick={() => setFormat(opt.value)}
                             className={`p-3 rounded-xl border text-left transition-all ${format === opt.value
-                                    ? 'border-[--color-primary] bg-[--color-primary]/10'
-                                    : 'border-[--color-border] hover:border-[--color-border-light] hover:bg-[--color-bg-hover]'
+                                ? 'border-[--color-primary] bg-[--color-primary]/10'
+                                : 'border-[--color-border] hover:border-[--color-border-light] hover:bg-[--color-bg-hover]'
                                 }`}
                         >
                             <div className="flex items-center gap-2 mb-1">
@@ -121,8 +168,8 @@ export function SubtitleExportPanel({ projectId, hasLLMCompleted }: SubtitleExpo
                             key={opt.value}
                             onClick={() => setContent(opt.value)}
                             className={`p-3 rounded-xl border text-left transition-all ${content === opt.value
-                                    ? 'border-[--color-primary] bg-[--color-primary]/10'
-                                    : 'border-[--color-border] hover:border-[--color-border-light] hover:bg-[--color-bg-hover]'
+                                ? 'border-[--color-primary] bg-[--color-primary]/10'
+                                : 'border-[--color-border] hover:border-[--color-border-light] hover:bg-[--color-bg-hover]'
                                 }`}
                         >
                             <div className="font-medium mb-1">{opt.label}</div>
@@ -142,8 +189,8 @@ export function SubtitleExportPanel({ projectId, hasLLMCompleted }: SubtitleExpo
                                 key={opt.value}
                                 onClick={() => setPosition(opt.value)}
                                 className={`p-3 rounded-xl border text-left transition-all ${position === opt.value
-                                        ? 'border-[--color-primary] bg-[--color-primary]/10'
-                                        : 'border-[--color-border] hover:border-[--color-border-light] hover:bg-[--color-bg-hover]'
+                                    ? 'border-[--color-primary] bg-[--color-primary]/10'
+                                    : 'border-[--color-border] hover:border-[--color-border-light] hover:bg-[--color-bg-hover]'
                                     }`}
                             >
                                 <div className="font-medium mb-1">{opt.label}</div>
@@ -198,8 +245,95 @@ export function SubtitleExportPanel({ projectId, hasLLMCompleted }: SubtitleExpo
 
             {/* Note */}
             <p className="mt-4 text-xs text-[--color-text-dim] text-center">
-                字幕将根据您的设置实时生成，无需预先导出
+                字幕将根据您的设置实时生成；也可保存导出版本用于后续下载
             </p>
+
+            {/* Save + History */}
+            <div className="mt-6 border-t border-[--color-border] pt-6">
+                <div className="flex items-center justify-between gap-3 mb-4">
+                    <div>
+                        <div className="text-sm font-medium">历史导出</div>
+                        <div className="text-xs text-[--color-text-muted]">保存的导出版本将写入存储（本地/桶）</div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <button
+                            onClick={refreshExports}
+                            disabled={exportsLoading}
+                            className="btn-secondary"
+                        >
+                            刷新
+                        </button>
+                        <button
+                            onClick={handleSaveExport}
+                            disabled={isSaving}
+                            className="btn-primary"
+                        >
+                            {isSaving ? '保存中…' : '保存并下载'}
+                        </button>
+                    </div>
+                </div>
+
+                {exportsError && (
+                    <div className="mb-4 p-3 rounded-lg bg-[--color-error]/10 border border-[--color-error]/30 text-xs text-[--color-error-light]">
+                        {exportsError}
+                    </div>
+                )}
+
+                {exportsLoading ? (
+                    <div className="text-xs text-[--color-text-muted]">加载中…</div>
+                ) : exports.length === 0 ? (
+                    <div className="text-xs text-[--color-text-dim]">暂无导出版本</div>
+                ) : (
+                    <div className="space-y-2">
+                        {exports.map((exp) => {
+                            const dt = new Date(exp.created_at)
+                            const ts = Number.isNaN(dt.getTime()) ? exp.created_at : dt.toLocaleString()
+                            const formatIcon = {
+                                srt: '📄',
+                                vtt: '🌐',
+                                ass: '🎨',
+                                json: '⚙️',
+                            }[exp.format] || '📄'
+                            return (
+                                <div
+                                    key={exp.id}
+                                    className="flex items-center justify-between gap-3 p-3 rounded-xl bg-[--color-bg]/50 border border-[--color-border] hover:border-[--color-border-light] transition-colors"
+                                >
+                                    <div className="flex items-center gap-3 min-w-0">
+                                        <div className="w-9 h-9 rounded-lg bg-[--color-bg-elevated] flex items-center justify-center text-lg shrink-0">
+                                            {formatIcon}
+                                        </div>
+                                        <div className="min-w-0">
+                                            <div className="flex items-center gap-2 text-sm font-medium">
+                                                <span>{exp.format.toUpperCase()}</span>
+                                                <span className="px-1.5 py-0.5 rounded bg-[--color-bg-elevated] text-[0.625rem] text-[--color-text-muted]">
+                                                    {exp.source === 'edited' ? '已编辑' : '自动'}
+                                                </span>
+                                            </div>
+                                            <div className="text-xs text-[--color-text-dim] truncate">{ts}</div>
+                                        </div>
+                                    </div>
+                                    <button
+                                        onClick={() => {
+                                            const link = document.createElement('a')
+                                            link.href = exp.download_url
+                                            document.body.appendChild(link)
+                                            link.click()
+                                            document.body.removeChild(link)
+                                        }}
+                                        className="btn-secondary shrink-0 py-2 px-3 text-xs"
+                                    >
+                                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                                        </svg>
+                                        下载
+                                    </button>
+                                </div>
+                            )
+                        })}
+                    </div>
+                )}
+            </div>
         </div>
     )
 }

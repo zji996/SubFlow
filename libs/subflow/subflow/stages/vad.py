@@ -9,7 +9,7 @@ from typing import cast
 from subflow.config import Settings
 from subflow.exceptions import StageExecutionError
 from subflow.models.segment import VADSegment
-from subflow.pipeline.context import PipelineContext
+from subflow.pipeline.context import PipelineContext, ProgressReporter
 from subflow.providers import get_vad_provider
 from subflow.stages.base import Stage
 
@@ -27,7 +27,11 @@ class VADStage(Stage):
     def validate_input(self, context: PipelineContext) -> bool:
         return bool(context.get("vocals_audio_path"))
 
-    async def execute(self, context: PipelineContext) -> PipelineContext:
+    async def execute(
+        self,
+        context: PipelineContext,
+        progress_reporter: ProgressReporter | None = None,
+    ) -> PipelineContext:
         audio_path = str(context["vocals_audio_path"])
         logger.info("vad start (audio_path=%s)", audio_path)
         try:

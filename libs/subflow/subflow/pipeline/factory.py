@@ -7,7 +7,6 @@ from subflow.pipeline.executor import PipelineExecutor
 from subflow.stages import (
     ASRStage,
     AudioPreprocessStage,
-    ExportStage,
     GlobalUnderstandingPass,
     LLMASRCorrectionStage,
     SemanticChunkingPass,
@@ -24,6 +23,5 @@ def create_translation_pipeline(config: Settings) -> PipelineExecutor:
         LLMASRCorrectionStage(config),
         GlobalUnderstandingPass(config),
         SemanticChunkingPass(config),
-        ExportStage(config, format="srt"),
     ]
     return PipelineExecutor(stages)

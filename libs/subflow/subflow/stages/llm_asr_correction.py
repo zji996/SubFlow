@@ -9,7 +9,7 @@ from typing import Any, cast
 
 from subflow.exceptions import StageExecutionError
 from subflow.models.segment import ASRCorrectedSegment, ASRMergedChunk, ASRSegment
-from subflow.pipeline.context import PipelineContext
+from subflow.pipeline.context import PipelineContext, ProgressReporter
 from subflow.providers.llm import Message
 from subflow.stages.base_llm import BaseLLMStage
 
@@ -53,7 +53,11 @@ class LLMASRCorrectionStage(BaseLLMStage):
         ]
         return "\n".join(parts).strip()
 
-    async def execute(self, context: PipelineContext) -> PipelineContext:
+    async def execute(
+        self,
+        context: PipelineContext,
+        progress_reporter: ProgressReporter | None = None,
+    ) -> PipelineContext:
         context = cast(PipelineContext, dict(context))
         asr_segments: list[ASRSegment] = list(context.get("asr_segments") or [])
         merged_chunks: list[ASRMergedChunk] = list(context.get("asr_merged_chunks") or [])
@@ -127,8 +131,14 @@ class LLMASRCorrectionStage(BaseLLMStage):
                 out[seg_id] = new_text
             return out
 
-        updates_list = await asyncio.gather(*[_process_chunk(c) for c in merged_chunks])
-        for updates in updates_list:
+        total_chunks = len(merged_chunks)
+        if progress_reporter and total_chunks > 0:
+            await progress_reporter.report(0, f"纠错中 0/{total_chunks} 区域")
+
+        done_chunks = 0
+        tasks = [asyncio.create_task(_process_chunk(c)) for c in merged_chunks]
+        for fut in asyncio.as_completed(tasks):
+            updates = await fut
             for seg_id, new_text in updates.items():
                 seg = asr_by_id.get(int(seg_id))
                 if seg is None:
@@ -139,6 +149,10 @@ class LLMASRCorrectionStage(BaseLLMStage):
                     asr_segment_id=int(seg_id),
                     text=str(new_text or "").strip(),
                 )
+            done_chunks += 1
+            if progress_reporter and total_chunks > 0:
+                pct = int(done_chunks / total_chunks * 100)
+                await progress_reporter.report(pct, f"纠错中 {done_chunks}/{total_chunks} 区域")
 
         # Ensure we keep a complete corrected view for downstream export.
         for seg in asr_segments:

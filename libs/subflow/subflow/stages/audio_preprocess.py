@@ -11,7 +11,7 @@ import httpx
 
 from subflow.config import Settings
 from subflow.exceptions import ConfigurationError, StageExecutionError
-from subflow.pipeline.context import PipelineContext
+from subflow.pipeline.context import PipelineContext, ProgressReporter
 from subflow.providers import get_audio_provider
 from subflow.services import BlobStore
 from subflow.stages.base import Stage
@@ -31,7 +31,11 @@ class AudioPreprocessStage(Stage):
         media_url = context.get("media_url") or context.get("video_url")
         return bool(run_id) and bool(media_url)
 
-    async def execute(self, context: PipelineContext) -> PipelineContext:
+    async def execute(
+        self,
+        context: PipelineContext,
+        progress_reporter: ProgressReporter | None = None,
+    ) -> PipelineContext:
         run_id = str(context.get("project_id") or context.get("job_id") or "")
         media_url = str(context.get("media_url") or context.get("video_url") or "")
         if not run_id or not media_url:

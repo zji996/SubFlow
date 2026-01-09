@@ -21,5 +21,5 @@ class PipelineExecutor:
         for stage in self.stages:
             if not stage.validate_input(context):
                 raise StageExecutionError(stage.name, "input validation failed")
-            context = await stage.execute(context)
+            context = await stage.execute(context, None)
         return context
