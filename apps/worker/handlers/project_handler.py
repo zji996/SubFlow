@@ -10,7 +10,15 @@ from redis.asyncio import Redis
 from subflow.config import Settings
 from subflow.models.project import ProjectStatus, StageName
 from subflow.pipeline import PipelineOrchestrator
-from subflow.services import ProjectStore
+from subflow.repositories import (
+    ASRSegmentRepository,
+    DatabasePool,
+    GlobalContextRepository,
+    ProjectRepository,
+    SemanticChunkRepository,
+    StageRunRepository,
+    VADSegmentRepository,
+)
 from subflow.storage import get_artifact_store
 
 logger = logging.getLogger(__name__)
@@ -21,20 +29,32 @@ async def process_project_task(task: dict[str, Any], redis: Redis, settings: Set
     if not project_id:
         return
 
-    project_store = ProjectStore(
-        redis,
-        ttl_seconds=int(settings.redis_project_ttl_days) * 24 * 3600,
-    )
-    project = await project_store.get(project_id)
+    pool = await DatabasePool.get_pool(settings)
+    project_repo = ProjectRepository(pool)
+    stage_run_repo = StageRunRepository(pool)
+    vad_repo = VADSegmentRepository(pool)
+    asr_repo = ASRSegmentRepository(pool)
+    global_context_repo = GlobalContextRepository(pool)
+    semantic_chunk_repo = SemanticChunkRepository(pool)
+
+    project = await project_repo.get(project_id)
     if project is None:
         return
 
     store = get_artifact_store(settings)
-    orchestrator = PipelineOrchestrator(settings, store=store, on_project_update=project_store.save)
+    orchestrator = PipelineOrchestrator(
+        settings,
+        store=store,
+        project_repo=project_repo,
+        stage_run_repo=stage_run_repo,
+        vad_repo=vad_repo,
+        asr_repo=asr_repo,
+        global_context_repo=global_context_repo,
+        semantic_chunk_repo=semantic_chunk_repo,
+    )
 
     try:
-        project.status = ProjectStatus.PROCESSING
-        await project_store.save(project)
+        await project_repo.update_status(project_id, ProjectStatus.PROCESSING.value, project.current_stage)
 
         typ = str(task.get("type", "")).strip()
         if typ == "run_all":
@@ -55,7 +75,6 @@ async def process_project_task(task: dict[str, Any], redis: Redis, settings: Set
                     start_index = 0
             for s in stage_order[start_index:]:
                 project, _ = await orchestrator.run_stage(project, s)
-                await project_store.save(project)
         elif typ == "run_stage":
             stage_raw = task.get("stage")
             if not stage_raw:
@@ -64,16 +83,14 @@ async def process_project_task(task: dict[str, Any], redis: Redis, settings: Set
             if stage == StageName.EXPORT:
                 stage = StageName.LLM
             project, _ = await orchestrator.run_stage(project, stage)
-            await project_store.save(project)
             if project.auto_workflow and stage != StageName.LLM:
                 project, _ = await orchestrator.run_stage(project, StageName.LLM)
             elif not project.auto_workflow and project.status == ProjectStatus.PROCESSING:
                 project.status = ProjectStatus.PAUSED
+                await project_repo.update_status(project_id, ProjectStatus.PAUSED.value, project.current_stage)
         else:
             return
-        await project_store.save(project)
+        await project_repo.update_status(project_id, project.status.value, project.current_stage)
 
     except Exception as exc:
-        project.status = ProjectStatus.FAILED
-        project.artifacts.setdefault("errors", []).append(str(exc))
-        await project_store.save(project)
+        await project_repo.update_status(project_id, ProjectStatus.FAILED.value, project.current_stage, error_message=str(exc))

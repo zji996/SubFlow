@@ -7,13 +7,6 @@ from abc import ABC, abstractmethod
 from typing import cast
 
 from subflow.config import Settings
-from subflow.models.serializers import (
-    serialize_asr_corrected_segments,
-    serialize_asr_merged_chunks,
-    serialize_asr_segments,
-    serialize_semantic_chunks,
-    serialize_vad_segments,
-)
 from subflow.models.project import Project, StageName
 from subflow.models.segment import (
     ASRCorrectedSegment,
@@ -23,6 +16,12 @@ from subflow.models.segment import (
     VADSegment,
 )
 from subflow.pipeline.context import PipelineContext, ProgressReporter
+from subflow.repositories import (
+    ASRSegmentRepository,
+    GlobalContextRepository,
+    SemanticChunkRepository,
+    VADSegmentRepository,
+)
 from subflow.stages import (
     ASRStage,
     AudioPreprocessStage,
@@ -55,6 +54,10 @@ class StageRunner(ABC):
         *,
         settings: Settings,
         store: ArtifactStore,
+        vad_repo: VADSegmentRepository,
+        asr_repo: ASRSegmentRepository,
+        global_context_repo: GlobalContextRepository,
+        semantic_chunk_repo: SemanticChunkRepository,
         project: Project,
         ctx: PipelineContext,
         progress_reporter: ProgressReporter | None = None,
@@ -70,6 +73,10 @@ class AudioPreprocessRunner(StageRunner):
         *,
         settings: Settings,
         store: ArtifactStore,
+        vad_repo: VADSegmentRepository,  # noqa: ARG002
+        asr_repo: ASRSegmentRepository,  # noqa: ARG002
+        global_context_repo: GlobalContextRepository,  # noqa: ARG002
+        semantic_chunk_repo: SemanticChunkRepository,  # noqa: ARG002
         project: Project,
         ctx: PipelineContext,
         progress_reporter: ProgressReporter | None = None,
@@ -97,6 +104,10 @@ class VADRunner(StageRunner):
         *,
         settings: Settings,
         store: ArtifactStore,
+        vad_repo: VADSegmentRepository,
+        asr_repo: ASRSegmentRepository,  # noqa: ARG002
+        global_context_repo: GlobalContextRepository,  # noqa: ARG002
+        semantic_chunk_repo: SemanticChunkRepository,  # noqa: ARG002
         project: Project,
         ctx: PipelineContext,
         progress_reporter: ProgressReporter | None = None,
@@ -107,26 +118,10 @@ class VADRunner(StageRunner):
         finally:
             await _maybe_close(stage)
 
+        await vad_repo.delete_by_project(project.id)
         vad_segments: list[VADSegment] = list(ctx.get("vad_segments") or [])
-        ident = await store.save_json(
-            project.id,
-            self.stage_name.value,
-            "vad_segments.json",
-            serialize_vad_segments(vad_segments),
-        )
-        artifacts: dict[str, str] = {"vad_segments.json": ident}
-
-        vad_regions: list[VADSegment] = list(ctx.get("vad_regions") or [])
-        if vad_regions:
-            regions_ident = await store.save_json(
-                project.id,
-                self.stage_name.value,
-                "vad_regions.json",
-                serialize_vad_segments(vad_regions),
-            )
-            artifacts["vad_regions.json"] = regions_ident
-
-        return ctx, artifacts
+        await vad_repo.bulk_insert(project.id, vad_segments)
+        return ctx, {}
 
 
 class ASRRunner(StageRunner):
@@ -137,6 +132,10 @@ class ASRRunner(StageRunner):
         *,
         settings: Settings,
         store: ArtifactStore,
+        vad_repo: VADSegmentRepository,  # noqa: ARG002
+        asr_repo: ASRSegmentRepository,
+        global_context_repo: GlobalContextRepository,  # noqa: ARG002
+        semantic_chunk_repo: SemanticChunkRepository,  # noqa: ARG002
         project: Project,
         ctx: PipelineContext,
         progress_reporter: ProgressReporter | None = None,
@@ -147,30 +146,26 @@ class ASRRunner(StageRunner):
         finally:
             await _maybe_close(stage)
 
+        await asr_repo.delete_by_project(project.id)
         asr_segments: list[ASRSegment] = list(ctx.get("asr_segments") or [])
-        asr_ident = await store.save_json(
-            project.id,
-            self.stage_name.value,
-            "asr_segments.json",
-            serialize_asr_segments(asr_segments),
-        )
-        transcript_ident = await store.save_text(
-            project.id,
-            self.stage_name.value,
-            "full_transcript.txt",
-            str(ctx.get("full_transcript") or ""),
-        )
+        await asr_repo.bulk_insert(project.id, asr_segments)
+
         merged_chunks: list[ASRMergedChunk] = list(ctx.get("asr_merged_chunks") or [])
-        merged_ident = await store.save_json(
-            project.id,
-            self.stage_name.value,
-            "asr_merged_chunks.json",
-            serialize_asr_merged_chunks(merged_chunks),
-        )
+        merged_ident = ""
+        if merged_chunks:
+            from subflow.models.serializers import serialize_asr_merged_chunks
+
+            merged_ident = await store.save_json(
+                project.id,
+                self.stage_name.value,
+                "asr_merged_chunks.json",
+                serialize_asr_merged_chunks(merged_chunks),
+            )
+        artifacts: dict[str, str] = {}
+        if merged_ident:
+            artifacts["asr_merged_chunks.json"] = merged_ident
         return ctx, {
-            "asr_segments.json": asr_ident,
-            "full_transcript.txt": transcript_ident,
-            "asr_merged_chunks.json": merged_ident,
+            **artifacts,
         }
 
 
@@ -182,6 +177,10 @@ class LLMASRCorrectionRunner(StageRunner):
         *,
         settings: Settings,
         store: ArtifactStore,
+        vad_repo: VADSegmentRepository,  # noqa: ARG002
+        asr_repo: ASRSegmentRepository,
+        global_context_repo: GlobalContextRepository,  # noqa: ARG002
+        semantic_chunk_repo: SemanticChunkRepository,  # noqa: ARG002
         project: Project,
         ctx: PipelineContext,
         progress_reporter: ProgressReporter | None = None,
@@ -193,13 +192,11 @@ class LLMASRCorrectionRunner(StageRunner):
             await _maybe_close(stage)
 
         corrected_map: dict[int, ASRCorrectedSegment] = dict(ctx.get("asr_corrected_segments") or {})
-        corrected_ident = await store.save_json(
+        await asr_repo.update_corrected_texts(
             project.id,
-            self.stage_name.value,
-            "asr_corrected_segments.json",
-            serialize_asr_corrected_segments(corrected_map),
+            {int(k): str(v.text or "") for k, v in corrected_map.items()},
         )
-        return ctx, {"asr_corrected_segments.json": corrected_ident}
+        return ctx, {}
 
 
 class LLMRunner(StageRunner):
@@ -210,10 +207,17 @@ class LLMRunner(StageRunner):
         *,
         settings: Settings,
         store: ArtifactStore,
+        vad_repo: VADSegmentRepository,  # noqa: ARG002
+        asr_repo: ASRSegmentRepository,  # noqa: ARG002
+        global_context_repo: GlobalContextRepository,
+        semantic_chunk_repo: SemanticChunkRepository,
         project: Project,
         ctx: PipelineContext,
         progress_reporter: ProgressReporter | None = None,
     ) -> tuple[PipelineContext, dict[str, str]]:
+        await global_context_repo.delete(project.id)
+        await semantic_chunk_repo.delete_by_project(project.id)
+
         max_asr = settings.llm_limits.max_asr_segments
         if isinstance(max_asr, int) and max_asr > 0:
             asr_segments_for_llm: list[ASRSegment] = list(ctx.get("asr_segments") or [])
@@ -248,20 +252,10 @@ class LLMRunner(StageRunner):
         finally:
             await _maybe_close(stage2)
 
-        global_ident = await store.save_json(
-            project.id,
-            self.stage_name.value,
-            "global_context.json",
-            dict(ctx.get("global_context") or {}),
-        )
+        await global_context_repo.save(project.id, dict(ctx.get("global_context") or {}))
         chunks: list[SemanticChunk] = list(ctx.get("semantic_chunks") or [])
-        chunks_ident = await store.save_json(
-            project.id,
-            self.stage_name.value,
-            "semantic_chunks.json",
-            serialize_semantic_chunks(chunks),
-        )
-        return ctx, {"global_context.json": global_ident, "semantic_chunks.json": chunks_ident}
+        await semantic_chunk_repo.bulk_insert(project.id, chunks)
+        return ctx, {}
 
 
 RUNNERS: dict[StageName, StageRunner] = {

@@ -8,6 +8,15 @@ from pathlib import Path
 from subflow.config import Settings
 from subflow.models.project import Project, StageName
 from subflow.pipeline import PipelineOrchestrator
+from subflow.repositories import (
+    ASRSegmentRepository,
+    DatabasePool,
+    GlobalContextRepository,
+    ProjectRepository,
+    SemanticChunkRepository,
+    StageRunRepository,
+    VADSegmentRepository,
+)
 from subflow.storage import get_artifact_store
 
 
@@ -61,14 +70,34 @@ async def _run() -> int:
         target_language=str(args.target_language),
     )
 
+    pool = await DatabasePool.get_pool(settings)
+    project_repo = ProjectRepository(pool)
+    stage_run_repo = StageRunRepository(pool)
+    vad_repo = VADSegmentRepository(pool)
+    asr_repo = ASRSegmentRepository(pool)
+    global_context_repo = GlobalContextRepository(pool)
+    semantic_chunk_repo = SemanticChunkRepository(pool)
+    existing = await project_repo.get(project.id)
+    if existing is None:
+        await project_repo.create(project)
+    else:
+        project = existing
+
     store = get_artifact_store(settings)
-    orchestrator = PipelineOrchestrator(settings, store=store)
+    orchestrator = PipelineOrchestrator(
+        settings,
+        store=store,
+        project_repo=project_repo,
+        stage_run_repo=stage_run_repo,
+        vad_repo=vad_repo,
+        asr_repo=asr_repo,
+        global_context_repo=global_context_repo,
+        semantic_chunk_repo=semantic_chunk_repo,
+    )
     from_stage = StageName(str(args.from_stage)) if args.from_stage else None
     project, _ = await orchestrator.run_all(project, from_stage=from_stage)
 
-    export = (project.artifacts or {}).get(StageName.EXPORT.value) or {}
-    srt_path = export.get("subtitles.srt")
-    print(f"project_id={project.id} status={project.status.value} srt={srt_path}")
+    print(f"project_id={project.id} status={project.status.value} current_stage={project.current_stage}")
     return 0
 
 

@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, ConfigDict, Field
 from redis.asyncio import Redis
+from psycopg_pool import AsyncConnectionPool
 
 from services.project_service import ProjectService
 from subflow.config import Settings
@@ -20,13 +21,7 @@ from subflow.export.formatters.base import SubtitleFormatter, selected_lines
 from subflow.models.subtitle_export import SubtitleExport, SubtitleExportSource
 from subflow.models.project import Project, StageName
 from subflow.models.segment import ASRCorrectedSegment, ASRSegment, SemanticChunk
-from subflow.models.serializers import (
-    deserialize_asr_corrected_segments,
-    deserialize_asr_segments,
-    deserialize_semantic_chunks,
-    serialize_asr_segments,
-    serialize_semantic_chunks,
-)
+from subflow.models.serializers import serialize_asr_segments, serialize_semantic_chunks
 from subflow.models.subtitle_types import (
     AssStyleConfig,
     SubtitleContent,
@@ -34,6 +29,12 @@ from subflow.models.subtitle_types import (
     SubtitleExportConfig,
     SubtitleFormat,
     TranslationStyle,
+)
+from subflow.repositories import (
+    ASRSegmentRepository,
+    SemanticChunkRepository,
+    StageRunRepository,
+    SubtitleExportRepository,
 )
 from subflow.storage import get_artifact_store
 
@@ -148,7 +149,17 @@ def _safe_filename_base(value: str) -> str:
 def _service(request: Request) -> ProjectService:
     redis: Redis = request.app.state.redis
     settings: Settings = request.app.state.settings
-    return ProjectService(redis=redis, settings=settings)
+    pool: AsyncConnectionPool | None = getattr(request.app.state, "db_pool", None)
+    if pool is None:
+        raise HTTPException(status_code=500, detail="db pool not initialized")
+    return ProjectService(redis=redis, settings=settings, pool=pool)
+
+
+def _pool(request: Request) -> AsyncConnectionPool:
+    pool: AsyncConnectionPool | None = getattr(request.app.state, "db_pool", None)
+    if pool is None:
+        raise HTTPException(status_code=500, detail="db pool not initialized")
+    return pool
 
 
 def _to_response(project: Project) -> ProjectResponse:
@@ -200,48 +211,20 @@ def _find_export(project: Project, export_id: str) -> SubtitleExport | None:
 
 
 async def _load_subtitle_materials(
-    settings: Settings,
-    project: Project,
+    pool: AsyncConnectionPool,
+    project_id: str,
 ) -> tuple[list[SemanticChunk], list[ASRSegment], dict[int, ASRCorrectedSegment] | None]:
-    store = get_artifact_store(settings)
-
-    asr_segments: list[ASRSegment] = []
-    try:
-        raw_asr = await store.load_json(project.id, StageName.ASR.value, "asr_segments.json")
-        if isinstance(raw_asr, list):
-            asr_segments = deserialize_asr_segments(raw_asr)
-    except FileNotFoundError:
-        pass
-
+    asr_repo = ASRSegmentRepository(pool)
+    semantic_chunk_repo = SemanticChunkRepository(pool)
+    asr_segments = await asr_repo.get_by_project(project_id, use_corrected=False)
+    corrections = await asr_repo.get_corrected_map(project_id)
     corrected: dict[int, ASRCorrectedSegment] | None = None
-    try:
-        raw_corrected = await store.load_json(
-            project.id,
-            StageName.LLM_ASR_CORRECTION.value,
-            "asr_corrected_segments.json",
-        )
-        if isinstance(raw_corrected, list):
-            corrected = deserialize_asr_corrected_segments(raw_corrected)
-    except FileNotFoundError:
-        try:
-            raw_corrected = await store.load_json(
-                project.id,
-                StageName.LLM.value,
-                "asr_corrected_segments.json",
-            )
-            if isinstance(raw_corrected, list):
-                corrected = deserialize_asr_corrected_segments(raw_corrected)
-        except FileNotFoundError:
-            pass
-
-    chunks: list[SemanticChunk] = []
-    try:
-        raw_chunks = await store.load_json(project.id, StageName.LLM.value, "semantic_chunks.json")
-        if isinstance(raw_chunks, list):
-            chunks = deserialize_semantic_chunks(raw_chunks)
-    except FileNotFoundError:
-        pass
-
+    if corrections:
+        corrected = {
+            int(seg_id): ASRCorrectedSegment(id=int(seg_id), asr_segment_id=int(seg_id), text=str(text or ""))
+            for seg_id, text in corrections.items()
+        }
+    chunks = await semantic_chunk_repo.get_by_project(project_id)
     return chunks, asr_segments, corrected
 
 
@@ -316,8 +299,13 @@ async def get_artifacts(request: Request, project_id: str, stage: StageName) -> 
     project = await service.get_project(project_id)
     if project is None:
         raise HTTPException(status_code=404, detail="project not found")
-    artifacts = dict(project.artifacts or {})
-    return {"project_id": project_id, "stage": stage.value, "artifacts": artifacts.get(stage.value)}
+    stage_run_repo = StageRunRepository(_pool(request))
+    sr = await stage_run_repo.get(project_id, stage.value)
+    return {
+        "project_id": project_id,
+        "stage": stage.value,
+        "artifacts": dict(sr.output_artifacts or {}) if sr is not None else {},
+    }
 
 
 @router.get("/{project_id}/artifacts/{stage}/{artifact_name}")
@@ -486,7 +474,7 @@ async def create_export(
         subtitle_text = SubtitleExporter().export_entries(generated_entries, config)
     elif payload.edited_entries:
         source = SubtitleExportSource.EDITED
-        chunks, asr_segments, corrected = await _load_subtitle_materials(settings, project)
+        chunks, asr_segments, corrected = await _load_subtitle_materials(_pool(request), project_id)
         if not asr_segments:
             raise HTTPException(status_code=404, detail="ASR 数据不存在")
 
@@ -594,7 +582,7 @@ async def create_export(
 
         subtitle_text = SubtitleExporter().export_entries(generated_entries, config)
     else:
-        chunks, asr_segments, corrected = await _load_subtitle_materials(settings, project)
+        chunks, asr_segments, corrected = await _load_subtitle_materials(_pool(request), project_id)
         if not asr_segments:
             raise HTTPException(status_code=404, detail="ASR 数据不存在")
         subtitle_text = SubtitleExporter().export(
@@ -645,6 +633,7 @@ async def create_export(
             "primary_position": payload.primary_position,
             "translation_style": translation_style.value,
             "ass_style": ass_style_dict if fmt == SubtitleFormat.ASS else None,
+            "has_entries": bool(generated_entries is not None),
         },
         ensure_ascii=False,
     )
@@ -663,8 +652,8 @@ async def create_export(
         entries_name=entries_name,
         entries_key=entries_key,
     )
-    project.exports.append(exp)
-    await service.save_project(project)
+    exp_repo = SubtitleExportRepository(_pool(request))
+    exp = await exp_repo.create(exp)
     return _export_to_detail_response(project_id, exp)
 
 
@@ -746,7 +735,7 @@ async def preview_subtitles(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    chunks, asr_segments, corrected = await _load_subtitle_materials(settings, project)
+    chunks, asr_segments, corrected = await _load_subtitle_materials(_pool(request), project_id)
     if not asr_segments:
         raise HTTPException(status_code=404, detail="asr segments not found")
 
@@ -806,7 +795,7 @@ async def get_subtitle_edit_data(request: Request, project_id: str) -> SubtitleE
     if settings is None:
         raise HTTPException(status_code=500, detail="settings not initialized")
 
-    chunks, asr_segments, corrected = await _load_subtitle_materials(settings, project)
+    chunks, asr_segments, corrected = await _load_subtitle_materials(_pool(request), project_id)
     if not asr_segments:
         raise HTTPException(status_code=404, detail="ASR 数据不存在")
 
@@ -909,7 +898,7 @@ async def download_subtitles(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    chunks, asr_segments, corrected = await _load_subtitle_materials(settings, project)
+    chunks, asr_segments, corrected = await _load_subtitle_materials(_pool(request), project_id)
     if not asr_segments:
         raise HTTPException(status_code=404, detail="ASR 数据不存在")
 

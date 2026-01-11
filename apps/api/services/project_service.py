@@ -1,4 +1,4 @@
-"""Project CRUD and queue operations backed by Redis."""
+"""Project CRUD and queue operations backed by PostgreSQL + Redis queue."""
 
 from __future__ import annotations
 
@@ -8,30 +8,45 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from redis.asyncio import Redis
+from psycopg_pool import AsyncConnectionPool
 
 from subflow.config import Settings
 from subflow.models.project import Project, ProjectStatus, StageName
-from subflow.services import BlobStore, ProjectStore
+from subflow.repositories import (
+    ProjectRepository,
+    StageRunRepository,
+    SubtitleExportRepository,
+)
+from subflow.services import BlobStore
 
 logger = logging.getLogger(__name__)
 
 
 class ProjectService:
-    def __init__(self, redis: Redis, settings: Settings):
+    def __init__(self, redis: Redis, settings: Settings, pool: AsyncConnectionPool):
         self.redis = redis
         self.settings = settings
-        self.store = ProjectStore(
-            redis,
-            ttl_seconds=int(settings.redis_project_ttl_days) * 24 * 3600,
-        )
-
-    @staticmethod
-    def _index_key() -> str:
-        return "subflow:projects:index"
+        self.project_repo = ProjectRepository(pool)
+        self.stage_run_repo = StageRunRepository(pool)
+        self.subtitle_export_repo = SubtitleExportRepository(pool)
 
     @staticmethod
     def _queue_key() -> str:
         return "subflow:projects:queue"
+
+    async def _hydrate_project(self, project: Project) -> Project:
+        project.stage_runs = await self.stage_run_repo.list_by_project(project.id)
+        stage_order = {
+            StageName.AUDIO_PREPROCESS: 1,
+            StageName.VAD: 2,
+            StageName.ASR: 3,
+            StageName.LLM_ASR_CORRECTION: 4,
+            StageName.LLM: 5,
+        }
+        project.stage_runs.sort(key=lambda sr: stage_order.get(sr.stage, 999))
+        project.exports = await self.subtitle_export_repo.list_by_project(project.id)
+        project.artifacts = {}
+        return project
 
     async def create_project(
         self,
@@ -58,30 +73,28 @@ class ProjectService:
             created_at=now,
             updated_at=now,
         )
-        await self.store.save(project)
-        await self.redis.sadd(self._index_key(), project_id)
-        return project
+        await self.project_repo.create(project)
+        return await self._hydrate_project(project)
 
     async def list_projects(self) -> list[Project]:
-        ids = sorted(list(await self.redis.smembers(self._index_key())))
-        projects: list[Project] = []
-        for pid in ids:
-            p = await self.get_project(pid)
-            if p is not None:
-                projects.append(p)
-        return projects
+        projects = await self.project_repo.list(limit=200, offset=0)
+        out: list[Project] = []
+        for p in projects:
+            out.append(await self._hydrate_project(p))
+        return out
 
     async def get_project(self, project_id: str) -> Project | None:
-        return await self.store.get(project_id)
+        p = await self.project_repo.get(project_id)
+        if p is None:
+            return None
+        return await self._hydrate_project(p)
 
     async def save_project(self, project: Project) -> None:
-        await self.store.save(project)
-        await self.redis.sadd(self._index_key(), project.id)
+        await self.project_repo.update(project)
 
     async def delete_project(self, project_id: str) -> bool:
-        removed = await self.store.delete(project_id)
-        await self.redis.srem(self._index_key(), project_id)
-        if removed:
+        removed = await self.project_repo.delete(project_id)
+        if bool(removed):
             try:
                 await BlobStore(self.settings).release_project_files(project_id)
             except Exception as exc:

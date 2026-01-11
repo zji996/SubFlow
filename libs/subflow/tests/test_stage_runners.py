@@ -38,6 +38,64 @@ class InMemoryArtifactStore(ArtifactStore):
         return []
 
 
+class _FakeVADRepo:
+    def __init__(self) -> None:
+        self.deleted: list[str] = []
+        self.inserted: dict[str, list[VADSegment]] = {}
+
+    async def delete_by_project(self, project_id: str) -> None:
+        self.deleted.append(str(project_id))
+        self.inserted.pop(str(project_id), None)
+
+    async def bulk_insert(self, project_id: str, segments: list[VADSegment]) -> None:
+        self.inserted[str(project_id)] = list(segments)
+
+
+class _FakeASRRepo:
+    def __init__(self) -> None:
+        self.deleted: list[str] = []
+        self.inserted: dict[str, list[ASRSegment]] = {}
+        self.corrected: dict[str, dict[int, str]] = {}
+
+    async def delete_by_project(self, project_id: str) -> None:
+        self.deleted.append(str(project_id))
+        self.inserted.pop(str(project_id), None)
+        self.corrected.pop(str(project_id), None)
+
+    async def bulk_insert(self, project_id: str, segments: list[ASRSegment]) -> None:
+        self.inserted[str(project_id)] = list(segments)
+
+    async def update_corrected_texts(self, project_id: str, corrections: dict[int, str]) -> None:
+        self.corrected[str(project_id)] = {int(k): str(v) for k, v in dict(corrections or {}).items()}
+
+
+class _FakeGlobalContextRepo:
+    def __init__(self) -> None:
+        self.deleted: list[str] = []
+        self.saved: dict[str, dict] = {}
+
+    async def delete(self, project_id: str) -> None:
+        self.deleted.append(str(project_id))
+        self.saved.pop(str(project_id), None)
+
+    async def save(self, project_id: str, context: dict) -> None:
+        self.saved[str(project_id)] = dict(context)
+
+
+class _FakeSemanticChunkRepo:
+    def __init__(self) -> None:
+        self.deleted: list[str] = []
+        self.saved: dict[str, list[SemanticChunk]] = {}
+
+    async def delete_by_project(self, project_id: str) -> None:
+        self.deleted.append(str(project_id))
+        self.saved.pop(str(project_id), None)
+
+    async def bulk_insert(self, project_id: str, chunks: list[SemanticChunk]) -> list[int]:
+        self.saved[str(project_id)] = list(chunks)
+        return list(range(len(chunks)))
+
+
 @dataclass
 class _FakeStage:
     ctx_update: dict
@@ -55,27 +113,53 @@ async def test_audio_preprocess_runner_persists_stage1(settings, monkeypatch) ->
     store = InMemoryArtifactStore()
     runner = AudioPreprocessRunner()
     project = Project(id="p1", name="n", media_url="u", target_language="zh")
+    vad_repo = _FakeVADRepo()
+    asr_repo = _FakeASRRepo()
+    global_context_repo = _FakeGlobalContextRepo()
+    semantic_chunk_repo = _FakeSemanticChunkRepo()
 
     stage = _FakeStage({"video_path": "v.mp4", "audio_path": "a.wav", "vocals_audio_path": "vocals.wav"})
     monkeypatch.setattr("subflow.pipeline.stage_runners.AudioPreprocessStage", lambda _s: stage)
 
-    ctx, artifacts = await runner.run(settings=settings, store=store, project=project, ctx={})
+    ctx, artifacts = await runner.run(
+        settings=settings,
+        store=store,
+        vad_repo=vad_repo,
+        asr_repo=asr_repo,
+        global_context_repo=global_context_repo,
+        semantic_chunk_repo=semantic_chunk_repo,
+        project=project,
+        ctx={},
+    )
     assert artifacts["stage1.json"].startswith("mem://")
     assert ctx["audio_path"] == "a.wav"
     assert any(name == "stage1.json" for _pid, _st, name, _payload in store.saved)
 
 
 @pytest.mark.asyncio
-async def test_vad_runner_persists_segments_and_regions(settings, monkeypatch) -> None:
+async def test_vad_runner_persists_segments_to_repo(settings, monkeypatch) -> None:
     store = InMemoryArtifactStore()
     runner = VADRunner()
     project = Project(id="p1", name="n", media_url="u", target_language="zh")
+    vad_repo = _FakeVADRepo()
+    asr_repo = _FakeASRRepo()
+    global_context_repo = _FakeGlobalContextRepo()
+    semantic_chunk_repo = _FakeSemanticChunkRepo()
     stage = _FakeStage({"vad_segments": [VADSegment(start=0.0, end=1.0)], "vad_regions": [VADSegment(start=0.0, end=2.0)]})
     monkeypatch.setattr("subflow.pipeline.stage_runners.VADStage", lambda _s: stage)
 
-    _ctx, artifacts = await runner.run(settings=settings, store=store, project=project, ctx={})
-    assert "vad_segments.json" in artifacts
-    assert "vad_regions.json" in artifacts
+    _ctx, artifacts = await runner.run(
+        settings=settings,
+        store=store,
+        vad_repo=vad_repo,
+        asr_repo=asr_repo,
+        global_context_repo=global_context_repo,
+        semantic_chunk_repo=semantic_chunk_repo,
+        project=project,
+        ctx={},
+    )
+    assert artifacts == {}
+    assert vad_repo.inserted["p1"][0].start == 0.0
 
 
 @pytest.mark.asyncio
@@ -83,6 +167,10 @@ async def test_asr_runner_persists_segments_transcript_and_merged(settings, monk
     store = InMemoryArtifactStore()
     runner = ASRRunner()
     project = Project(id="p1", name="n", media_url="u", target_language="zh")
+    vad_repo = _FakeVADRepo()
+    asr_repo = _FakeASRRepo()
+    global_context_repo = _FakeGlobalContextRepo()
+    semantic_chunk_repo = _FakeSemanticChunkRepo()
     stage = _FakeStage(
         {
             "asr_segments": [ASRSegment(id=0, start=0.0, end=1.0, text="hi", language="en")],
@@ -92,8 +180,18 @@ async def test_asr_runner_persists_segments_transcript_and_merged(settings, monk
     )
     monkeypatch.setattr("subflow.pipeline.stage_runners.ASRStage", lambda _s: stage)
 
-    _ctx, artifacts = await runner.run(settings=settings, store=store, project=project, ctx={})
-    assert set(artifacts.keys()) == {"asr_segments.json", "full_transcript.txt", "asr_merged_chunks.json"}
+    _ctx, artifacts = await runner.run(
+        settings=settings,
+        store=store,
+        vad_repo=vad_repo,
+        asr_repo=asr_repo,
+        global_context_repo=global_context_repo,
+        semantic_chunk_repo=semantic_chunk_repo,
+        project=project,
+        ctx={},
+    )
+    assert set(artifacts.keys()) == {"asr_merged_chunks.json"}
+    assert asr_repo.inserted["p1"][0].text == "hi"
 
 
 @pytest.mark.asyncio
@@ -101,6 +199,10 @@ async def test_llm_asr_correction_runner_persists_corrected_segments(settings, m
     store = InMemoryArtifactStore()
     runner = LLMASRCorrectionRunner()
     project = Project(id="p1", name="n", media_url="u", target_language="zh")
+    vad_repo = _FakeVADRepo()
+    asr_repo = _FakeASRRepo()
+    global_context_repo = _FakeGlobalContextRepo()
+    semantic_chunk_repo = _FakeSemanticChunkRepo()
     stage = _FakeStage(
         {
             "asr_corrected_segments": {
@@ -110,8 +212,18 @@ async def test_llm_asr_correction_runner_persists_corrected_segments(settings, m
     )
     monkeypatch.setattr("subflow.pipeline.stage_runners.LLMASRCorrectionStage", lambda _s: stage)
 
-    _ctx, artifacts = await runner.run(settings=settings, store=store, project=project, ctx={})
-    assert "asr_corrected_segments.json" in artifacts
+    _ctx, artifacts = await runner.run(
+        settings=settings,
+        store=store,
+        vad_repo=vad_repo,
+        asr_repo=asr_repo,
+        global_context_repo=global_context_repo,
+        semantic_chunk_repo=semantic_chunk_repo,
+        project=project,
+        ctx={},
+    )
+    assert artifacts == {}
+    assert asr_repo.corrected["p1"][0] == "hi"
 
 
 @pytest.mark.asyncio
@@ -119,6 +231,10 @@ async def test_llm_runner_truncates_asr_segments(settings, monkeypatch) -> None:
     store = InMemoryArtifactStore()
     runner = LLMRunner()
     project = Project(id="p1", name="n", media_url="u", target_language="zh")
+    vad_repo = _FakeVADRepo()
+    asr_repo = _FakeASRRepo()
+    global_context_repo = _FakeGlobalContextRepo()
+    semantic_chunk_repo = _FakeSemanticChunkRepo()
 
     settings.llm_limits.max_asr_segments = 1
 
@@ -150,7 +266,16 @@ async def test_llm_runner_truncates_asr_segments(settings, monkeypatch) -> None:
         },
     }
 
-    ctx_out, artifacts = await runner.run(settings=settings, store=store, project=project, ctx=ctx_in)
+    ctx_out, artifacts = await runner.run(
+        settings=settings,
+        store=store,
+        vad_repo=vad_repo,
+        asr_repo=asr_repo,
+        global_context_repo=global_context_repo,
+        semantic_chunk_repo=semantic_chunk_repo,
+        project=project,
+        ctx=ctx_in,
+    )
     assert len(ctx_out["asr_segments"]) == 1
-    assert "semantic_chunks.json" in artifacts
-    assert "global_context.json" in artifacts
+    assert artifacts == {}
+    assert global_context_repo.saved["p1"]["topic"] == "t"

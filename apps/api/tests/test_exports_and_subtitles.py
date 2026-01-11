@@ -2,40 +2,22 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from subflow.models.project import StageName
 from subflow.models.segment import ASRCorrectedSegment, ASRSegment, SemanticChunk, TranslationChunk
-from subflow.models.serializers import (
-    serialize_asr_corrected_segments,
-    serialize_asr_segments,
-    serialize_semantic_chunks,
-)
-from subflow.services.project_store import ProjectStore
-from subflow.storage import get_artifact_store
+from subflow.models.project import ProjectStatus
 
 
-def _set_project_stage(redis, project_id: str, stage: int) -> None:
-    store = ProjectStore(redis, ttl_seconds=3600)
-
-    async def _do() -> None:
-        project = await store.get(project_id)
-        assert project is not None
-        project.current_stage = int(stage)
-        await store.save(project)
-
-    import anyio
-
-    anyio.run(_do)
+def _set_project_stage(pool, project_id: str, stage: int) -> None:  # noqa: ANN001
+    proj = pool.projects.get(str(project_id))
+    assert proj is not None
+    proj.current_stage = int(stage)
+    proj.status = ProjectStatus.COMPLETED
 
 
-def _seed_subtitle_artifacts(settings, project_id: str) -> None:
-    store = get_artifact_store(settings)
+def _seed_subtitle_materials(pool, project_id: str) -> None:  # noqa: ANN001
     asr_segments = [
         ASRSegment(id=0, start=0.0, end=1.0, text="a", language="en"),
         ASRSegment(id=1, start=1.0, end=2.0, text="b", language="en"),
     ]
-    corrected = {
-        0: ASRCorrectedSegment(id=0, asr_segment_id=0, text="A"),
-    }
     chunks = [
         SemanticChunk(
             id=0,
@@ -48,24 +30,19 @@ def _seed_subtitle_artifacts(settings, project_id: str) -> None:
             ],
         )
     ]
-
-    async def _do() -> None:
-        await store.save_json(project_id, StageName.ASR.value, "asr_segments.json", serialize_asr_segments(asr_segments))
-        await store.save_json(
-            project_id,
-            StageName.LLM_ASR_CORRECTION.value,
-            "asr_corrected_segments.json",
-            serialize_asr_corrected_segments(corrected),
-        )
-        await store.save_json(project_id, StageName.LLM.value, "semantic_chunks.json", serialize_semantic_chunks(chunks))
-
-    import anyio
-
-    anyio.run(_do)
+    pid = str(project_id)
+    pool.asr_segments[pid] = list(asr_segments)
+    pool.asr_corrections[pid] = {0: "A"}
+    pool.semantic_chunks[pid] = list(chunks)
 
 
-def _seed_custom_subtitle_artifacts(settings, project_id: str, *, translation: str, chunks: list[TranslationChunk]) -> None:
-    store = get_artifact_store(settings)
+def _seed_custom_subtitle_materials(
+    pool,  # noqa: ANN001
+    project_id: str,
+    *,
+    translation: str,
+    chunks: list[TranslationChunk],
+) -> None:
     asr_segments = [
         ASRSegment(id=0, start=0.0, end=1.0, text="a", language="en"),
         ASRSegment(id=1, start=1.0, end=2.0, text="b", language="en"),
@@ -82,20 +59,10 @@ def _seed_custom_subtitle_artifacts(settings, project_id: str, *, translation: s
             translation_chunks=chunks,
         )
     ]
-
-    async def _do() -> None:
-        await store.save_json(project_id, StageName.ASR.value, "asr_segments.json", serialize_asr_segments(asr_segments))
-        await store.save_json(
-            project_id,
-            StageName.LLM_ASR_CORRECTION.value,
-            "asr_corrected_segments.json",
-            serialize_asr_corrected_segments(corrected),
-        )
-        await store.save_json(project_id, StageName.LLM.value, "semantic_chunks.json", serialize_semantic_chunks(semantic_chunks))
-
-    import anyio
-
-    anyio.run(_do)
+    pid = str(project_id)
+    pool.asr_segments[pid] = list(asr_segments)
+    pool.asr_corrections[pid] = {0: str(corrected[0].text)}
+    pool.semantic_chunks[pid] = list(semantic_chunks)
 
 
 def test_upload_endpoint_saves_file_locally(client, settings) -> None:
@@ -115,7 +82,7 @@ def test_exports_create_list_download_from_entries(client, redis, settings) -> N
         json={"name": "demo", "media_url": "https://example.com/v.mp4", "target_language": "zh"},
     )
     pid = res.json()["id"]
-    _set_project_stage(redis, pid, 5)
+    _set_project_stage(client.app.state.db_pool, pid, 5)
 
     res = client.post(
         f"/projects/{pid}/exports",
@@ -147,14 +114,14 @@ def test_exports_create_from_artifacts_and_subtitle_endpoints(client, redis, set
         json={"name": "demo", "media_url": "https://example.com/v.mp4", "target_language": "zh"},
     )
     pid = res.json()["id"]
-    _seed_subtitle_artifacts(settings, pid)
+    _seed_subtitle_materials(client.app.state.db_pool, pid)
 
     res = client.get(f"/projects/{pid}/subtitles/preview")
     assert res.status_code == 200
     payload = res.json()
     assert payload["total"] == 2
 
-    _set_project_stage(redis, pid, 5)
+    _set_project_stage(client.app.state.db_pool, pid, 5)
 
     res = client.get(f"/projects/{pid}/subtitles/download?format=srt&content=both&primary_position=top")
     assert res.status_code == 200
@@ -188,13 +155,13 @@ def test_exports_create_from_edited_entries_propagates_per_chunk_group(client, r
         json={"name": "demo", "media_url": "https://example.com/v.mp4", "target_language": "zh"},
     )
     pid = res.json()["id"]
-    _seed_custom_subtitle_artifacts(
-        settings,
+    _seed_custom_subtitle_materials(
+        client.app.state.db_pool,
         pid,
         translation="甲乙丙丁",
         chunks=[TranslationChunk(text="共用", segment_ids=[0, 1])],
     )
-    _set_project_stage(redis, pid, 5)
+    _set_project_stage(client.app.state.db_pool, pid, 5)
 
     res = client.post(
         f"/projects/{pid}/exports",
@@ -225,13 +192,13 @@ def test_exports_per_segment_uses_split_full_translation(client, redis, settings
         json={"name": "demo", "media_url": "https://example.com/v.mp4", "target_language": "zh"},
     )
     pid = res.json()["id"]
-    _seed_custom_subtitle_artifacts(
-        settings,
+    _seed_custom_subtitle_materials(
+        client.app.state.db_pool,
         pid,
         translation="甲乙丙丁",
         chunks=[TranslationChunk(text="共用", segment_ids=[0, 1])],
     )
-    _set_project_stage(redis, pid, 5)
+    _set_project_stage(client.app.state.db_pool, pid, 5)
 
     res = client.post(
         f"/projects/{pid}/exports",

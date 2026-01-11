@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import tempfile
 from pathlib import Path
 from typing import cast
 
@@ -72,13 +71,14 @@ class ASRStage(Stage):
             max_chunk_s=float(self.settings.asr.max_chunk_s),
         )
 
-        # Create temp directory for audio segments / merged chunks
+        # Create workdir for audio segments / merged chunks (cleaned up after stage)
         run_id = str(context.get("project_id") or context.get("job_id") or "unknown")
-        base_dir = Path(tempfile.gettempdir()) / "subflow" / run_id
+        base_dir = Path(self.settings.data_dir) / "workdir" / run_id
         segments_dir = base_dir / "asr_segments"
         merged_dir = base_dir / "asr_merged_chunks"
 
         try:
+            base_dir.mkdir(parents=True, exist_ok=True)
             logger.info("asr start (segments=%d)", len(vad_segments))
             # 1. Cut audio into segments (concurrent ffmpeg)
             time_ranges = [(seg.start, seg.end) for seg in vad_segments]
@@ -216,6 +216,12 @@ class ASRStage(Stage):
                     merged_dir.rmdir()
                 except OSError as exc:
                     logger.debug("failed to remove temp dir %s: %s", merged_dir, exc)
+            if base_dir.exists():
+                try:
+                    base_dir.rmdir()
+                except OSError:
+                    # Keep workdir when other stages wrote additional temp files.
+                    pass
 
         return context
 
