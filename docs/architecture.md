@@ -179,6 +179,11 @@ SubFlow 是一个基于语义理解的视频字幕翻译系统。与传统的逐
 
 **目标**：对比 “region 内合并识别” 与 “分段识别”，纠正分段 ASR 的听错字、漏字、多字，并删除明显幻觉。
 
+**并行策略（2026-01）**：
+- 纠错任务以 `asr_merged_chunks` 为单位执行
+- 当启用 `PARALLEL_ENABLED=true` 时，会基于 `vad_regions` 的 region gap（`PARALLEL_MIN_GAP_SECONDS`）进行分区；分区间可并行处理
+- LLM 并发上限按服务类型控制：`CONCURRENCY_LLM_FAST` / `CONCURRENCY_LLM_POWER`（取决于 `LLM_ASR_CORRECTION=fast|power`）
+
 **输入 Artifact**: `asr_segments.json` + `asr_merged_chunks.json`  
 **输出 Artifact**: `asr_corrected_segments.json`
 
@@ -192,6 +197,11 @@ SubFlow 是一个基于语义理解的视频字幕翻译系统。与传统的逐
 - Pass 2（语义切分+翻译）：从（已纠错的）`asr_segments` 生成 `semantic_chunks`，包含：
   - `translation`：完整意译
   - `translation_chunks`：翻译分段（1 个 chunk 可覆盖多个段落）
+
+**并行策略（2026-01）**：
+- Pass 2 在启用 `PARALLEL_ENABLED=true` 时，会按 `vad_regions` 的 region gap 分区；每个分区内部保持贪心串行，分区间并行
+- 分区间无 `【上一轮翻译】` 上下文传递；Pass 1 的 `global_context` 共享
+- LLM 并发上限按服务类型控制：`CONCURRENCY_LLM_POWER`（或当 `LLM_SEMANTIC_TRANSLATION=fast` 时使用 `CONCURRENCY_LLM_FAST`）
 
 Stage 5 的详细提示词、输入/输出 JSON、以及给 LLM 的实际输入（System Prompt + User Input）已拆到：`docs/llm_multi_pass.md`。
 

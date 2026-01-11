@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import json
 from typing import Any, cast
 
 from subflow.exceptions import StageExecutionError
-from subflow.models.segment import ASRSegment, SemanticChunk, TranslationChunk
+from subflow.models.segment import ASRSegment, SemanticChunk, TranslationChunk, VADSegment
 from subflow.pipeline.context import PipelineContext, ProgressReporter
 from subflow.providers.llm import Message
 from subflow.stages.base_llm import BaseLLMStage
 from subflow.utils.tokenizer import truncate_to_tokens, count_tokens
+from subflow.utils.vad_region_mapper import build_region_segment_ids
+from subflow.utils.vad_region_partition import partition_vad_regions_by_gap
 
 logger = logging.getLogger(__name__)
 
@@ -346,6 +349,8 @@ class SemanticChunkingPass(BaseLLMStage):
         context = cast(PipelineContext, dict(context))
         asr_segments: list[ASRSegment] = list(context.get("asr_segments", []))
         target_language = str(context.get("target_language", "zh"))
+        parallel_enabled = bool(getattr(self.settings, "parallel", None) and self.settings.parallel.enabled)
+        vad_regions: list[VADSegment] = list(context.get("vad_regions") or [])
 
         # Fallback if no API key
         if not self.api_key:
@@ -369,7 +374,212 @@ class SemanticChunkingPass(BaseLLMStage):
             context["asr_segments_index"] = {seg.id: seg for seg in asr_segments}
             return context
 
-        # Greedy sequential processing
+        llm_limit = max(1, int(self.get_concurrency_limit(self.settings)))
+        llm_semaphore = asyncio.Semaphore(llm_limit)
+
+        async def _complete_json(messages: list[Message]) -> Any:
+            async with llm_semaphore:
+                return await self.json_helper.complete_json(messages)
+
+        async def _run_partition(
+            partition_segments: list[ASRSegment],
+        ) -> list[SemanticChunk]:
+            if not partition_segments:
+                return []
+
+            base_id = int(partition_segments[0].id)
+            id_list = [int(s.id) for s in partition_segments]
+            index_by_id: dict[int, int] = {sid: i for i, sid in enumerate(id_list)}
+
+            def _abs_to_local(abs_cursor: int) -> int:
+                if abs_cursor in index_by_id:
+                    return int(index_by_id[abs_cursor])
+                rel = int(abs_cursor) - base_id
+                if 0 <= rel <= len(partition_segments):
+                    return rel
+                # Fallback: resume from first segment whose id >= abs_cursor.
+                for i, seg in enumerate(partition_segments):
+                    if int(seg.id) >= int(abs_cursor):
+                        return i
+                return len(partition_segments)
+
+            local_chunks: list[SemanticChunk] = []
+            local_cursor = 0
+            chunk_id = 0
+            window_size = self.DEFAULT_WINDOW_SIZE
+            input_context = _compact_global_context(context.get("global_context"))
+
+            while local_cursor < len(partition_segments):
+                prev_cursor = local_cursor
+                window_end = min(local_cursor + window_size, len(partition_segments))
+                window = partition_segments[local_cursor:window_end]
+                if not window:
+                    break
+
+                window_start_abs = int(window[0].id)
+
+                asr_payload = [
+                    {"id": i, "start": s.start, "end": s.end, "text": s.text}
+                    for i, s in enumerate(window)
+                ]
+
+                system_prompt = self._get_system_prompt()
+                previous_chunk = local_chunks[-1] if local_chunks else None
+                user_input = self._get_user_input(
+                    target_language=target_language,
+                    input_context=input_context,
+                    asr_payload=asr_payload,
+                    previous_chunk=previous_chunk,
+                )
+
+                result = await _complete_json(
+                    [
+                        Message(role="system", content=system_prompt),
+                        Message(role="user", content=user_input),
+                    ]
+                )
+                if not isinstance(result, dict):
+                    raise StageExecutionError(self.name, "Semantic chunking output must be a JSON object")
+
+                need_more = self._parse_need_more_context(result)
+                if need_more is not None:
+                    additional, reason = need_more
+                    if additional > 0:
+                        new_size = min(window_size + additional, self.MAX_WINDOW_SIZE)
+                        if new_size > window_size:
+                            logger.info(
+                                "llm_semantic_chunking expand window (cursor=%d, size=%d->%d, reason=%s)",
+                                window_start_abs,
+                                window_size,
+                                new_size,
+                                reason,
+                            )
+                            window_size = new_size
+                            continue
+
+                    if window_size >= self.MAX_WINDOW_SIZE:
+                        forced_note = "已达到最大窗口限制，请不要返回 need_more_context，必须输出情况1 的 JSON。"
+                    else:
+                        forced_note = "additional_segments 必须为正数；请不要返回 need_more_context，必须输出情况1 的 JSON。"
+                    forced_prompt = system_prompt + f"\n\n【系统提示】{forced_note}"
+                    logger.warning(
+                        "llm_semantic_chunking force output (cursor=%d, window_size=%d, reason=%s, additional=%d)",
+                        window_start_abs,
+                        window_size,
+                        reason,
+                        additional,
+                    )
+                    forced = await _complete_json(
+                        [
+                            Message(role="system", content=forced_prompt),
+                            Message(role="user", content=user_input),
+                        ]
+                    )
+                    if not isinstance(forced, dict):
+                        raise StageExecutionError(self.name, "Semantic chunking output must be a JSON object")
+                    result = forced
+
+                    still_need_more = self._parse_need_more_context(result)
+                    has_any_translation = any(
+                        key in result
+                        for key in ("translation", "translation_chunks", "segments", "asr_segment_ids", "chunk")
+                    )
+                    if still_need_more is not None and not has_any_translation:
+                        raise StageExecutionError(
+                            self.name,
+                            "LLM requested more context at max window without providing translation output",
+                        )
+
+                new_chunk, next_cursor_abs = self._parse_result(
+                    result,
+                    window_start=window_start_abs,
+                    window_segments=window,
+                    chunk_id=chunk_id,
+                )
+
+                if new_chunk is None:
+                    local_cursor = _abs_to_local(next_cursor_abs) if next_cursor_abs > window_start_abs else local_cursor + 1
+                    window_size = self.DEFAULT_WINDOW_SIZE
+                else:
+                    local_chunks.append(new_chunk)
+                    chunk_id += 1
+                    local_cursor = _abs_to_local(next_cursor_abs)
+                    window_size = self.DEFAULT_WINDOW_SIZE
+
+                if local_cursor <= prev_cursor:
+                    local_cursor = prev_cursor + 1
+
+            return local_chunks
+
+        if parallel_enabled and len(vad_regions) > 1:
+            partitions = partition_vad_regions_by_gap(
+                vad_regions,
+                min_gap_seconds=float(self.settings.parallel.min_gap_seconds),
+            )
+            logger.info(
+                "llm_semantic_chunking region partitions (regions=%d, partitions=%d, min_gap=%.2fs, concurrency=%d)",
+                len(vad_regions),
+                len(partitions),
+                float(self.settings.parallel.min_gap_seconds),
+                llm_limit,
+            )
+
+            segment_regions = [VADSegment(start=s.start, end=s.end) for s in asr_segments]
+            region_segment_ids = build_region_segment_ids(vad_regions, segment_regions)
+            if not region_segment_ids and asr_segments:
+                region_segment_ids = [list(range(len(asr_segments)))]
+
+            partition_segments_list: list[list[ASRSegment]] = []
+            for part in partitions:
+                seg_ids: list[int] = []
+                for rid in part.region_ids():
+                    if 0 <= int(rid) < len(region_segment_ids):
+                        seg_ids.extend(region_segment_ids[int(rid)])
+                if not seg_ids:
+                    continue
+                partition_segments_list.append([asr_segments[i] for i in seg_ids])
+
+            total_segments = len(asr_segments)
+            if progress_reporter and total_segments > 0:
+                await progress_reporter.report(0, f"翻译中 0/{total_segments} 段")
+
+            done_segments = 0
+            done_lock = asyncio.Lock()
+
+            async def _wrap(part_segs: list[ASRSegment]) -> list[SemanticChunk]:
+                nonlocal done_segments
+                chunks = await _run_partition(part_segs)
+                async with done_lock:
+                    done_segments += len(part_segs)
+                    if progress_reporter and total_segments > 0:
+                        pct = int(min(done_segments, total_segments) / total_segments * 100)
+                        await progress_reporter.report(pct, f"翻译中 {min(done_segments, total_segments)}/{total_segments} 段")
+                return chunks
+
+            partition_results = await asyncio.gather(*[_wrap(segs) for segs in partition_segments_list])
+            all_chunks = [c for chunks in partition_results for c in chunks]
+
+            asr_by_id: dict[int, ASRSegment] = {int(s.id): s for s in asr_segments}
+
+            def _chunk_sort_key(ch: SemanticChunk) -> tuple[float, int]:
+                for sid in list(ch.asr_segment_ids or []):
+                    seg = asr_by_id.get(int(sid))
+                    if seg is not None:
+                        return (float(seg.start), int(sid))
+                return (float("inf"), int(ch.id))
+
+            all_chunks.sort(key=_chunk_sort_key)
+            for i, ch in enumerate(all_chunks):
+                ch.id = i
+
+            context["asr_segments"] = asr_segments
+            context["asr_segments_index"] = {seg.id: seg for seg in asr_segments}
+            context["full_transcript"] = " ".join(seg.text for seg in asr_segments if seg.text)
+            context["semantic_chunks"] = all_chunks
+            logger.info("llm_semantic_chunking done (chunks=%d)", len(all_chunks))
+            return context
+
+        # Greedy sequential processing (legacy behavior)
         logger.info("llm_semantic_chunking start (asr_segments=%d)", len(asr_segments))
         all_chunks: list[SemanticChunk] = []
         cursor = 0
@@ -405,7 +615,7 @@ class SemanticChunkingPass(BaseLLMStage):
                 previous_chunk=previous_chunk,
             )
 
-            result = await self.json_helper.complete_json(
+            result = await _complete_json(
                 [
                     Message(role="system", content=system_prompt),
                     Message(role="user", content=user_input),
@@ -446,7 +656,7 @@ class SemanticChunkingPass(BaseLLMStage):
                     reason,
                     additional,
                 )
-                forced = await self.json_helper.complete_json(
+                forced = await _complete_json(
                     [
                         Message(role="system", content=forced_prompt),
                         Message(role="user", content=user_input),

@@ -8,10 +8,11 @@ import logging
 from typing import Any, cast
 
 from subflow.exceptions import StageExecutionError
-from subflow.models.segment import ASRCorrectedSegment, ASRMergedChunk, ASRSegment
+from subflow.models.segment import ASRCorrectedSegment, ASRMergedChunk, ASRSegment, VADSegment
 from subflow.pipeline.context import PipelineContext, ProgressReporter
 from subflow.providers.llm import Message
 from subflow.stages.base_llm import BaseLLMStage
+from subflow.utils.vad_region_partition import partition_vad_regions_by_gap
 
 logger = logging.getLogger(__name__)
 
@@ -74,16 +75,17 @@ class LLMASRCorrectionStage(BaseLLMStage):
 
         asr_by_id: dict[int, ASRSegment] = {int(seg.id): seg for seg in asr_segments}
         corrected: dict[int, ASRCorrectedSegment] = {}
+        concurrency = max(1, int(self.get_concurrency_limit(self.settings)))
 
         logger.info(
             "llm_asr_correction start (merged_chunks=%d, profile=%s, concurrency=%d)",
             len(merged_chunks),
             self.profile,
-            int(self.settings.concurrency_llm_correction),
+            concurrency,
         )
         system_prompt = self._get_system_prompt()
 
-        semaphore = asyncio.Semaphore(max(1, int(self.settings.concurrency_llm_correction)))
+        semaphore = asyncio.Semaphore(concurrency)
 
         async def _process_chunk(chunk: ASRMergedChunk) -> dict[int, str]:
             seg_payload: list[dict[str, Any]] = []
@@ -136,7 +138,30 @@ class LLMASRCorrectionStage(BaseLLMStage):
             await progress_reporter.report(0, f"纠错中 0/{total_chunks} 区域")
 
         done_chunks = 0
-        tasks = [asyncio.create_task(_process_chunk(c)) for c in merged_chunks]
+        parallel_enabled = bool(getattr(self.settings, "parallel", None) and self.settings.parallel.enabled)
+        if not parallel_enabled:
+            tasks = [asyncio.create_task(_process_chunk(c)) for c in merged_chunks]
+        else:
+            vad_regions: list[VADSegment] = list(context.get("vad_regions") or [])
+            partitions = partition_vad_regions_by_gap(
+                vad_regions,
+                min_gap_seconds=float(self.settings.parallel.min_gap_seconds),
+            )
+            logger.info(
+                "llm_asr_correction region partitions (regions=%d, partitions=%d, min_gap=%.2fs)",
+                len(vad_regions),
+                len(partitions),
+                float(self.settings.parallel.min_gap_seconds),
+            )
+            chunks_by_region: dict[int, list[ASRMergedChunk]] = {}
+            for c in merged_chunks:
+                chunks_by_region.setdefault(int(c.region_id), []).append(c)
+            ordered_chunks: list[ASRMergedChunk] = []
+            for part in partitions:
+                for rid in part.region_ids():
+                    ordered_chunks.extend(chunks_by_region.get(int(rid), []))
+            tasks = [asyncio.create_task(_process_chunk(c)) for c in ordered_chunks]
+
         for fut in asyncio.as_completed(tasks):
             updates = await fut
             for seg_id, new_text in updates.items():

@@ -22,7 +22,8 @@
 可选（并发/路由，见 `.env.example`）：
 
 - `LLM_ASR_CORRECTION` / `LLM_GLOBAL_UNDERSTANDING` / `LLM_SEMANTIC_TRANSLATION`：各阶段选择 `fast/power`
-- `CONCURRENCY_ASR` / `CONCURRENCY_LLM_CORRECTION`：ASR 与纠错并发数
+- `CONCURRENCY_ASR` / `CONCURRENCY_LLM_FAST` / `CONCURRENCY_LLM_POWER`：按服务类型设置并发
+- `PARALLEL_ENABLED` / `PARALLEL_MIN_GAP_SECONDS`：基于 VAD region gap 的分区并行（Stage 4/5）
 
 快速确认 worker 侧能找到 VAD 模型：
 

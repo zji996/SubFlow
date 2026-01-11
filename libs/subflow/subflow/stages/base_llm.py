@@ -22,6 +22,12 @@ class BaseLLMStage(Stage):
         self.api_key = str(self.llm_cfg.get("api_key") or "")
         self.json_helper = LLMJSONHelper(self.llm, max_retries=3)
 
+    def get_concurrency_limit(self, settings: Settings) -> int:
+        """Return concurrency limit for the current LLM profile."""
+        profile = str(getattr(self, "profile", "") or "").strip().lower()
+        if profile == "power":
+            return int(settings.concurrency.llm_power)
+        return int(settings.concurrency.llm_fast)
+
     async def close(self) -> None:
         await self.llm.close()
-

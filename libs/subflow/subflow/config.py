@@ -3,6 +3,7 @@
 from pathlib import Path
 from typing import Any
 from pydantic import Field, model_validator
+from pydantic.aliases import AliasChoices
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from subflow.exceptions import ConfigurationError
@@ -94,6 +95,39 @@ class LLMStageRouting(BaseSettings):
     asr_correction: str = "fast"
     global_understanding: str = "fast"
     semantic_translation: str = "power"
+
+
+class ConcurrencyConfig(BaseSettings):
+    """Global concurrency limits by service type."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="CONCURRENCY_",
+        env_file=_ENV_FILES,
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    asr: int = Field(default=10, ge=1)
+    llm_fast: int = Field(
+        default=10,
+        ge=1,
+        validation_alias=AliasChoices("llm_fast", "CONCURRENCY_LLM_FAST"),
+    )
+    llm_power: int = Field(default=4, ge=1)
+
+
+class ParallelConfig(BaseSettings):
+    """Region-gap based parallel processing config."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="PARALLEL_",
+        env_file=_ENV_FILES,
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    enabled: bool = True
+    min_gap_seconds: float = Field(default=1.0, ge=0.1)
 
 
 class AudioConfig(BaseSettings):
@@ -208,9 +242,11 @@ class Settings(BaseSettings):
     llm_power: LLMPowerConfig = LLMPowerConfig()
     llm_stage: LLMStageRouting = LLMStageRouting()
 
-    # Concurrency (stage-level)
-    concurrency_asr: int = Field(default=10, ge=1)
-    concurrency_llm_correction: int = Field(default=10, ge=1)
+    # Concurrency (service-level)
+    concurrency: ConcurrencyConfig = ConcurrencyConfig()
+
+    # Region-gap based parallel processing (Stage 4 + Stage 5)
+    parallel: ParallelConfig = ParallelConfig()
 
     @model_validator(mode="after")
     def _resolve_paths(self) -> "Settings":
@@ -245,6 +281,15 @@ class Settings(BaseSettings):
         self.models_dir = _abs_dir(self.models_dir)
         self.data_dir = _abs_dir(self.data_dir)
         self.log_dir = _abs_dir(self.log_dir)
+
+    @property
+    def concurrency_asr(self) -> int:
+        return int(self.concurrency.asr)
+
+    @property
+    def concurrency_llm_correction(self) -> int:
+        # Deprecated alias: Stage 4 used to rely on this name.
+        return int(self.concurrency.llm_fast)
 
     @property
     def database_url(self) -> str:
