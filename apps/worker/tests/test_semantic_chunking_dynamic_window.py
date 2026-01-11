@@ -33,9 +33,7 @@ async def test_semantic_chunking_expands_window_when_requested(tmp_path) -> None
             {"need_more_context": {"reason": "cut off", "additional_segments": 4}},
             {
                 "translation": "T",
-                "translation_chunks": [
-                    {"text": "T", "segment_ids": list(range(10))},
-                ],
+                "asr_segment_ids": list(range(10)),
             },
         ]
     )
@@ -65,9 +63,7 @@ async def test_semantic_chunking_forces_output_at_max_window(tmp_path) -> None:
             {"need_more_context": {"reason": "still need more", "additional_segments": 5}},
             {
                 "translation": "T",
-                "translation_chunks": [
-                    {"text": "T", "segment_ids": list(range(15))},
-                ],
+                "asr_segment_ids": list(range(15)),
             },
         ]
     )

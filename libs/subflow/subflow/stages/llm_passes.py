@@ -13,6 +13,7 @@ from subflow.pipeline.context import PipelineContext, ProgressReporter
 from subflow.providers.llm import Message
 from subflow.stages.base_llm import BaseLLMStage
 from subflow.utils.tokenizer import truncate_to_tokens, count_tokens
+from subflow.utils.translation_distributor import distribute_translation
 from subflow.utils.vad_region_mapper import build_region_segment_ids
 from subflow.utils.vad_region_partition import partition_vad_regions_by_gap
 
@@ -134,12 +135,10 @@ class SemanticChunkingPass(BaseLLMStage):
 2. **延伸到语义完整为止**，形成一个自然的翻译单元
 3. **意译优先**：翻译要通顺自然、信达雅，传达意思而非逐字翻译
 
-## 翻译分段规则 (translation_chunks)
+## 翻译分段规则
 
-- 每个 chunk 是翻译的一个语义片段，映射到一个或多个 segment_ids
-- 分段方式由目标语言的语序和语义决定，不必与原文段落一一对应
-- 所有 chunks 拼接后 = 完整翻译 (translation)
-- 所有 segment_ids 合并后 = 覆盖的段落范围
+- 你只需要输出完整意译 `translation`
+- 程序会将 `translation` 自动均分成每段对应的 `translation_chunks`（无需你输出）
 
 ## 输出格式
 
@@ -147,10 +146,7 @@ class SemanticChunkingPass(BaseLLMStage):
 ```json
 {
   "translation": "完整意译",
-  "translation_chunks": [
-    {"text": "翻译片段1", "segment_ids": [0, 1]},
-    {"text": "翻译片段2", "segment_ids": [2]}
-  ]
+  "asr_segment_ids": [0, 1, 2]
 }
 ```
 
@@ -166,7 +162,7 @@ class SemanticChunkingPass(BaseLLMStage):
 
 ## 重要约束
 
-- translation_chunks 的 segment_ids 合并后必须覆盖所有被选中的段落
+- asr_segment_ids 必须覆盖所有被选中的段落（使用当前窗口内的相对 id：0..N-1）
 - 如果窗口内所有段落都是语气词/填充词，返回空翻译并覆盖所有段落
 - 只在确实无法形成完整语义时才请求更多上下文
 """
@@ -244,6 +240,20 @@ class SemanticChunkingPass(BaseLLMStage):
                 if not isinstance(ch, dict):
                     continue
                 chunk_text = str(ch.get("text") or "").strip()
+                raw_segment_id = ch.get("segment_id")
+                if raw_segment_id is not None:
+                    abs_ids = self._to_absolute_ids(
+                        [int(raw_segment_id)],
+                        window_start=window_start,
+                        window_len=window_len,
+                    )
+                    if not abs_ids:
+                        continue
+                    abs_id = int(abs_ids[0])
+                    covered_ids.add(abs_id)
+                    translation_chunks.append(TranslationChunk(text=chunk_text, segment_id=abs_id))
+                    continue
+
                 raw_ids = ch.get("segment_ids")
                 if not isinstance(raw_ids, list):
                     raw_ids = []
@@ -252,13 +262,14 @@ class SemanticChunkingPass(BaseLLMStage):
                     window_start=window_start,
                     window_len=window_len,
                 )
-                abs_ids = sorted(set(abs_ids))
-                if not abs_ids:
-                    continue
-                covered_ids.update(abs_ids)
-                translation_chunks.append(
-                    TranslationChunk(text=chunk_text, segment_ids=abs_ids)
-                )
+                seen: set[int] = set()
+                for abs_id in abs_ids:
+                    abs_id = int(abs_id)
+                    if abs_id in seen:
+                        continue
+                    seen.add(abs_id)
+                    covered_ids.add(abs_id)
+                    translation_chunks.append(TranslationChunk(text=chunk_text, segment_id=abs_id))
 
         # Backward compatibility: legacy format with per-segment translations.
         if not translation_chunks:
@@ -282,7 +293,7 @@ class SemanticChunkingPass(BaseLLMStage):
                     abs_id = int(abs_ids[0])
                     covered_ids.add(abs_id)
                     translation_chunks.append(
-                        TranslationChunk(text=seg_translation, segment_ids=[abs_id])
+                        TranslationChunk(text=seg_translation, segment_id=abs_id)
                     )
 
         asr_segment_ids: list[int] = sorted(covered_ids)
@@ -312,17 +323,21 @@ class SemanticChunkingPass(BaseLLMStage):
         chunk: SemanticChunk | None = None
         if asr_segment_ids:
             text_parts: list[str] = []
-            for seg_id in asr_segment_ids:
+            covered_segments: list[ASRSegment] = []
+            normalized_ids: list[int] = []
+            for seg_id in list(asr_segment_ids or []):
                 seg = window_by_abs_id.get(seg_id)
                 if seg is not None:
+                    covered_segments.append(seg)
+                    normalized_ids.append(int(seg.id))
                     text_parts.append(str(seg.text or "").strip())
             text = " ".join(text_parts)
 
-            # Fallback: if caller only gave a full translation, treat it as a single chunk.
-            if not translation_chunks and translation:
-                translation_chunks = [
-                    TranslationChunk(text=translation, segment_ids=list(asr_segment_ids))
-                ]
+            asr_segment_ids = normalized_ids
+
+            # Fallback: if caller only gave a full translation, distribute it programmatically.
+            if not translation_chunks and translation and covered_segments:
+                translation_chunks = distribute_translation(translation, covered_segments)
 
             chunk = SemanticChunk(
                 id=chunk_id,
@@ -364,7 +379,7 @@ class SemanticChunkingPass(BaseLLMStage):
                     translation_chunks=[
                         TranslationChunk(
                             text=f"[{target_language}] {segment.text}",
-                            segment_ids=[segment.id],
+                            segment_id=segment.id,
                         )
                     ],
                 )

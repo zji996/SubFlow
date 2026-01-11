@@ -23,10 +23,26 @@ class _DummyAudioProvider:
         out.write_bytes(b"")
         return str(out)
 
+    async def normalize_audio(self, input_path: str, output_path: str, *, target_db: float = -1.0) -> str:  # noqa: ARG002
+        src = Path(input_path)
+        dst = Path(output_path)
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_bytes(src.read_bytes() + b"normalized")
+        return str(dst)
+
 
 class _CacheHitProvider(_DummyAudioProvider):
     async def separate_vocals(self, audio_path: str, output_dir: str) -> str:  # noqa: ARG002
         raise AssertionError("separate_vocals should not run on cache hit")
+
+
+class _CountingNormalizeProvider(_DummyAudioProvider):
+    def __init__(self) -> None:
+        self.normalize_calls = 0
+
+    async def normalize_audio(self, input_path: str, output_path: str, *, target_db: float = -1.0) -> str:  # noqa: ARG002
+        self.normalize_calls += 1
+        return await super().normalize_audio(input_path, output_path, target_db=target_db)
 
 
 async def test_audio_preprocess_rejects_unsupported_media_url(tmp_path) -> None:
@@ -122,6 +138,8 @@ async def test_audio_preprocess_reuses_cached_vocals(tmp_path, monkeypatch) -> N
         def __init__(self, settings: Settings) -> None:
             self.base_dir = Path(settings.data_dir) / "blobs"
             self._cached_vocals_hash = "6" * 64
+            self._normalize_enabled = bool(settings.audio.normalize)
+            self._normalize_target_db = float(settings.audio.normalize_target_db)
 
         def blob_path(self, hash_hex: str) -> Path:
             h = (hash_hex or "").strip().lower()
@@ -132,6 +150,13 @@ async def test_audio_preprocess_reuses_cached_vocals(tmp_path, monkeypatch) -> N
                 return None
             if not src_hash:
                 return None
+            if self._normalize_enabled:
+                if not isinstance(params, dict):
+                    return None
+                if params.get("normalize") is not True:
+                    return None
+                if float(params.get("normalize_target_db")) != self._normalize_target_db:
+                    return None
             return self._cached_vocals_hash
 
         async def set_derived(self, *, transform: str, src_hash: str, dst_hash: str, params=None) -> None:  # noqa: ANN001,ARG002
@@ -203,3 +228,43 @@ async def test_audio_preprocess_reuses_cached_vocals(tmp_path, monkeypatch) -> N
 
     assert Path(out["audio_path"]).exists()
     assert out["vocals_audio_path"] == str(cached_path)
+
+
+async def test_audio_preprocess_skips_normalize_when_disabled(tmp_path) -> None:
+    settings = Settings(
+        data_dir=str(tmp_path / "data"),
+        log_dir=str(tmp_path / "logs"),
+        models_dir=str(tmp_path / "models"),
+        audio={"normalize": False},
+    )
+    stage = AudioPreprocessStage(settings)
+    provider = _CountingNormalizeProvider()
+    stage.provider = provider  # type: ignore[assignment]
+
+    local_video = tmp_path / "video.mp4"
+    local_video.write_bytes(b"video")
+
+    out = await stage.execute({"project_id": "p1", "media_url": str(local_video)})
+
+    assert Path(out["vocals_audio_path"]).exists()
+    assert provider.normalize_calls == 0
+
+
+async def test_audio_preprocess_normalizes_when_enabled(tmp_path) -> None:
+    settings = Settings(
+        data_dir=str(tmp_path / "data"),
+        log_dir=str(tmp_path / "logs"),
+        models_dir=str(tmp_path / "models"),
+        audio={"normalize": True, "normalize_target_db": -1.0},
+    )
+    stage = AudioPreprocessStage(settings)
+    provider = _CountingNormalizeProvider()
+    stage.provider = provider  # type: ignore[assignment]
+
+    local_video = tmp_path / "video.mp4"
+    local_video.write_bytes(b"video")
+
+    out = await stage.execute({"project_id": "p1", "media_url": str(local_video)})
+
+    assert Path(out["vocals_audio_path"]).exists()
+    assert provider.normalize_calls == 1

@@ -63,8 +63,8 @@ def test_semantic_chunks_roundtrip_with_translation_chunks() -> None:
             translation="甲乙",
             asr_segment_ids=[0, 1],
             translation_chunks=[
-                TranslationChunk(text="甲", segment_ids=[0]),
-                TranslationChunk(text="乙", segment_ids=[1]),
+                TranslationChunk(text="甲", segment_id=0),
+                TranslationChunk(text="乙", segment_id=1),
             ],
         )
     ]
@@ -89,7 +89,7 @@ def test_deserialize_semantic_chunks_legacy_segment_translations() -> None:
     ]
     restored = deserialize_semantic_chunks(raw)
     assert restored[0].translation_chunks and len(restored[0].translation_chunks) == 2
-    assert restored[0].translation_chunks[0].segment_ids == [0]
+    assert restored[0].translation_chunks[0].segment_id == 0
     assert restored[0].translation_chunks[0].text == "甲"
 
 
@@ -100,5 +100,4 @@ def test_deserialize_semantic_chunks_fallback_full_translation() -> None:
     restored = deserialize_semantic_chunks(raw)
     assert restored[0].translation_chunks
     assert restored[0].translation_chunks[0].text == "甲"
-    assert restored[0].translation_chunks[0].segment_ids == [0]
-
+    assert restored[0].translation_chunks[0].segment_id == 0

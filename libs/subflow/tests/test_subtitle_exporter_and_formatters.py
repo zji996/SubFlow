@@ -72,8 +72,8 @@ def test_build_entries_translation_style_per_chunk_and_full() -> None:
             translation="全翻译",
             asr_segment_ids=[0, 1],
             translation_chunks=[
-                TranslationChunk(text="甲", segment_ids=[0]),
-                TranslationChunk(text="乙", segment_ids=[1]),
+                TranslationChunk(text="甲", segment_id=0),
+                TranslationChunk(text="乙", segment_id=1),
             ],
         )
     ]
@@ -99,7 +99,10 @@ def test_build_entries_translation_style_per_segment_splits_full_translation() -
             text="a b",
             translation="甲乙丙丁",
             asr_segment_ids=[0, 1],
-            translation_chunks=[TranslationChunk(text="共用", segment_ids=[0, 1])],
+            translation_chunks=[
+                TranslationChunk(text="共用", segment_id=0),
+                TranslationChunk(text="共用", segment_id=1),
+            ],
         )
     ]
     asr_segments = [

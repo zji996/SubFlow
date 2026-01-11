@@ -30,10 +30,10 @@
 
 ## 关键修复 (2026-01)
 
-### 1. 语义块翻译分段 (translation_chunks)
-- **问题**：不同语言语序差异大，无法做到段落 1:1 对应翻译
-- **解决**：改用 `translation_chunks`，每个 chunk 映射到一个或多个 `segment_ids`
-- 翻译分段与意译语义一致，支持意译均分
+### 1. 翻译均分算法 (translation_chunks)
+- **问题**：让 LLM 同时负责「翻译 + 按段落切分」会增加认知负担，输出质量不稳定
+- **解决**：LLM 只输出完整意译 `translation`，程序将其自动均分到各段落生成 `translation_chunks`
+- **分配规则**：优先按标点切分，其次按时长占比分配，且不允许空 chunk（翻译为空除外）
 
 ### 2. 动态窗口机制
 - **问题**：固定 6 个段落的窗口可能不足以表达完整语义
@@ -81,7 +81,7 @@
                                                     │ TranslationChunk    │
                                                     │ (翻译分段)           │
                                                     ├─────────────────────┤
-                                                    │ segment_ids: []     │
+                                                    │ segment_id: int     │
                                                     │ text: str           │
                                                     └─────────────────────┘
 ```
@@ -117,19 +117,19 @@ class ASRCorrectedSegment:
 
 ### 3. TranslationChunk (翻译分段)
 
-翻译的语义分段，每个分段映射到一个或多个 ASR 段落。用于实现"意译均分"功能。
+翻译的分段结果，每个分段映射到一个 ASR 段落（1:1），用于字幕主行的 `per_chunk` 显示。
 
 ```python
 @dataclass
 class TranslationChunk:
     text: str                    # 翻译片段（与意译语义一致）
-    segment_ids: list[int]       # 关联的 ASRSegment.id 列表
+    segment_id: int              # 关联的 ASRSegment.id
 ```
 
 > [!NOTE]
 > **与 SegmentTranslation 的区别**：
-> - `SegmentTranslation`：1 个段落 → 1 个翻译（1:1，语序依赖强）
-> - `TranslationChunk`：1 个翻译片段 → N 个段落（1:N，语序无关）
+> - `SegmentTranslation`：强调按段落顺序的 1:1 翻译（语序强绑定）
+> - `TranslationChunk`：同样 1:1，但由程序从完整意译中自动生成，用于按段落映射显示
 
 ### 4. SemanticChunk (语义块表)
 
@@ -201,12 +201,12 @@ while cursor < len(asr_segments):
         if new_size > window_size:
             window_size = new_size
             continue  # 不推进 cursor，用更大窗口重试
-        # 已达最大窗口，强制处理当前结果
+    # 已达最大窗口，强制处理当前结果
     
-    # 创建语义块（已包含翻译）
-    create_semantic_chunk(result.translation, result.translation_chunks)
+    # 创建语义块（程序从 translation 生成 translation_chunks）
+    create_semantic_chunk(result.translation, distribute_translation(...))
     
-    # 前进 cursor（系统自动计算 max(segment_ids) + 1）
+    # 前进 cursor（系统自动计算 max(segment_id) + 1）
     cursor = max(all_segment_ids) + 1
     window_size = DEFAULT_WINDOW_SIZE  # 重置窗口大小
 ```
@@ -215,7 +215,7 @@ while cursor < len(asr_segments):
 
 > [!IMPORTANT]
 > **核心设计要点**：
-> - **translation_chunks 而非 segments**：翻译分段按语义切分，不是按原文段落 1:1 对应
+> - **translation_chunks**：由程序从 `translation` 自动生成，LLM 不需要输出
 > - **动态窗口**：LLM 可返回 `need_more_context` 请求更多段落
 > - `next_cursor` 由系统自动计算，无需 LLM 输出
 > - LLM 收到上一个语义块作为上下文参考
@@ -229,12 +229,10 @@ while cursor < len(asr_segments):
 2. **延伸到语义完整为止**，形成一个自然的翻译单元
 3. **意译优先**：翻译要通顺自然、信达雅，传达意思而非逐字翻译
 
-## 翻译分段规则 (translation_chunks)
+## 翻译分段规则
 
-- 每个 chunk 是翻译的一个语义片段，映射到一个或多个 segment_ids
-- 分段方式由目标语言的语序和语义决定，不必与原文段落一一对应
-- 所有 chunks 拼接后 = 完整翻译 (translation)
-- 所有 segment_ids 合并后 = 覆盖的段落范围
+- 你只需要输出完整意译 `translation`
+- 程序会自动将 `translation` 均分到每个段落生成 `translation_chunks`（无需你输出）
 
 ## 输出格式
 
@@ -242,10 +240,7 @@ while cursor < len(asr_segments):
 ```json
 {
   "translation": "完整意译",
-  "translation_chunks": [
-    {"text": "翻译片段1", "segment_ids": [0, 1]},
-    {"text": "翻译片段2", "segment_ids": [2]}
-  ]
+  "asr_segment_ids": [0, 1, 2]
 }
 ```
 
@@ -261,12 +256,22 @@ while cursor < len(asr_segments):
 
 ## 重要约束
 
-- translation_chunks 的 segment_ids 合并后必须覆盖所有被选中的段落
+- asr_segment_ids 必须覆盖所有被选中的段落（使用当前窗口内的相对 id：0..N-1）
 - 如果窗口内所有段落都是语气词/填充词，返回空翻译并覆盖所有段落
 - 只在确实无法形成完整语义时才请求更多上下文
 ````
 
-> 说明：实现层兼容 legacy 的 `asr_segment_ids` 格式，方便逐步迁移。
+> 说明：实现层也兼容 legacy 的 `translation_chunks` / `segments` 格式，但推荐只输出 `translation` + `asr_segment_ids`。
+
+### 翻译均分算法（程序生成 translation_chunks）
+
+当 LLM 只输出完整意译 `translation` 时，系统会对该语义块覆盖的 `ASRSegment[]` 调用 `distribute_translation()` 生成 `translation_chunks`：
+
+- 优先按标点切分（`。，！？；：,.!?;:`），切分点标点不保留
+- 再按各 segment 时长占比分配片段
+- 不允许空 chunk（翻译为空/纯空白除外）
+- 若翻译无标点：按字/词/字符长度均分
+- 若 segments 数 > 片段数：最后一个片段会被共享（复制）给剩余 segments
 
 ### 上一语义块上下文
 
@@ -299,39 +304,15 @@ ASR 段落：
 
 ### LLM 输出示例
 
-**示例 1：正常输出（translation_chunks）**
+**示例 1：正常输出**
 ```json
 {
   "translation": "Today we'll discuss AI application scenarios",
-  "translation_chunks": [
-    {"text": "Today we'll discuss AI application scenarios", "segment_ids": [2, 3]}
-  ]
+  "asr_segment_ids": [2, 3]
 }
 ```
 
-> 注意：中文 "我们今天聊人工智能的应用场景" 翻译为英文时，语序相同，可以合并为一个 chunk。
-
-**示例 2：语序调整需要多个 chunks**
-
-假设原文段落：
-- [0] "明天"
-- [1] "我想去"
-- [2] "北京"
-
-```json
-{
-  "translation": "I want to go to Beijing tomorrow",
-  "translation_chunks": [
-    {"text": "I want to go to", "segment_ids": [1]},
-    {"text": "Beijing", "segment_ids": [2]},
-    {"text": "tomorrow", "segment_ids": [0]}
-  ]
-}
-```
-
-> 注意：中文 "明天我想去北京" → 英文 "I want to go to Beijing tomorrow"，语序不同，chunks 按目标语言语序排列。
-
-**示例 3：请求更多上下文**
+**示例 2：请求更多上下文**
 ```json
 {
   "need_more_context": {
@@ -349,13 +330,13 @@ ASR 段落：
 
 | TranslationStyle | 描述 |
 |------------------|------|
-| `per_chunk` (默认) | 根据 `translation_chunks` 分配翻译；同一 chunk 覆盖的多个段落共享该 chunk 的翻译 |
+| `per_chunk` (默认) | 根据程序生成的 `translation_chunks` 分配翻译；每个段落取其对应 `segment_id` 的翻译片段 |
 | `full` | 每行显示完整意译 (`translation`)，语义块内所有段落共享 |
 
 **per_chunk 分配逻辑**：
 - 遍历 `translation_chunks`
-- 每个 chunk 的翻译文本分配给其覆盖的所有 `segment_ids`
-- 若一个段落被多个 chunk 覆盖（理论上不应发生），取第一个
+- 每个 chunk 的翻译文本分配给其 `segment_id`
+- 若一个段落出现多个 chunk（理论上不应发生），取第一个
 
 - `start/end`：始终来自 `ASRSegment`（时间戳权威来源）
 - `primary_text`：翻译文本（根据 style 选择）
@@ -385,9 +366,10 @@ Pass 1 输出:
 
 Pass 2 LLM 输出 (贪心串行，一次调用):
   translation="Today we'll discuss AI application scenarios"
-  translation_chunks=[
-    {text: "Today we'll discuss AI application scenarios", segment_ids: [2, 3]}
-  ]
+  asr_segment_ids=[2, 3]
+
+Pass 2 程序生成:
+  translation_chunks=[{segment_id: 2, text: "Today we'll discuss AI"}, {segment_id: 3, text: "application scenarios"}]
 
 Stage 4（ASR 纠错）应用后 ASRCorrectedSegment[]:
   [0] asr_segment_id=0, text="嗯"
@@ -400,21 +382,20 @@ SemanticChunk[]:
       translation="Today we'll discuss AI application scenarios"
       asr_segment_ids=[2, 3]
       translation_chunks=[
-        {text: "Today we'll discuss AI application scenarios", segment_ids: [2, 3]}
+        {text: "Today we'll discuss AI", segment_id: 2}
+        {text: "application scenarios", segment_id: 3}
       ]
 
 字幕导出 (translation_style=per_chunk):
   1
   00:00:02,000 --> 00:00:03,600
-  Today we'll discuss AI application scenarios
+  Today we'll discuss AI
   我们今天聊人工智能
 
   2
   00:00:03,600 --> 00:00:05,000
-  Today we'll discuss AI application scenarios
+  application scenarios
   的应用场景
-
-  (注：两个段落共享同一个 chunk 的翻译)
 
 字幕导出 (translation_style=full):
   1

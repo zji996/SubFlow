@@ -35,14 +35,11 @@ def test_semantic_chunking_parse_result_translation_chunks_relative_ids() -> Non
     ]
     result = {
         "translation": "甲乙",
-        "translation_chunks": [
-            {"text": "甲", "segment_ids": [0]},
-            {"text": "乙", "segment_ids": [1]},
-        ],
+        "asr_segment_ids": [0, 1],
     }
     chunk, next_cursor = stage._parse_result(result, window_start=10, window_segments=window_segments, chunk_id=0)
     assert chunk is not None
     assert chunk.asr_segment_ids == [10, 11]
     assert next_cursor == 12
-    assert chunk.translation_chunks and chunk.translation_chunks[0].segment_ids == [10]
-
+    assert chunk.translation_chunks and chunk.translation_chunks[0].segment_id == 10
+    assert chunk.translation_chunks and chunk.translation_chunks[0].text == "甲"

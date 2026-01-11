@@ -769,9 +769,9 @@ async def create_export(
         for semantic_chunk in chunks:
             for idx, ch in enumerate(list(semantic_chunk.translation_chunks or [])):
                 key = (int(semantic_chunk.id), int(idx))
-                for seg_id in list(ch.segment_ids or []):
-                    per_chunk_translation.setdefault(int(seg_id), str(ch.text or "").strip())
-                    translation_chunk_key_by_segment_id.setdefault(int(seg_id), key)
+                seg_id = int(ch.segment_id)
+                per_chunk_translation.setdefault(seg_id, str(ch.text or "").strip())
+                translation_chunk_key_by_segment_id.setdefault(seg_id, key)
 
         ordered_segments = sorted(asr_segments, key=lambda s: (float(s.start), float(s.end), int(s.id)))
         segment_order = {int(seg.id): i for i, seg in enumerate(ordered_segments)}
@@ -1088,8 +1088,8 @@ async def get_subtitle_edit_data(request: Request, project_id: str) -> SubtitleE
     per_chunk_translation: dict[int, str] = {}
     for semantic_chunk in chunks:
         for ch in list(semantic_chunk.translation_chunks or []):
-            for seg_id in list(ch.segment_ids or []):
-                per_chunk_translation.setdefault(int(seg_id), str(ch.text or "").strip())
+            seg_id = int(ch.segment_id)
+            per_chunk_translation.setdefault(seg_id, str(ch.text or "").strip())
 
     segment_order: dict[int, int] = {}
     ordered_segments = sorted(asr_segments, key=lambda s: (float(s.start), float(s.end), int(s.id)))

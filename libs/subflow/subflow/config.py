@@ -39,7 +39,7 @@ class ASRConfig(BaseSettings):
     model: str = "glm-asr"
     timeout: float = 300.0  # 单个请求超时（秒）
     ffmpeg_concurrency: int = Field(default=10, ge=1)
-    max_chunk_s: float = Field(default=30.0, gt=0)
+    max_chunk_s: float = Field(default=15.0, gt=0)
 
 
 class LLMProfileConfig(BaseSettings):
@@ -145,6 +145,9 @@ class AudioConfig(BaseSettings):
     demucs_bin: str = "demucs"
     demucs_model: str = "htdemucs_ft"
     max_duration_s: float | None = None
+
+    normalize: bool = True
+    normalize_target_db: float = -1.0
 
 
 class VADConfig(BaseSettings):

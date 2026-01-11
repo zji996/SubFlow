@@ -74,9 +74,9 @@ class SubtitleExporter:
         per_chunk_translation: dict[int, str] = {}
         for semantic_chunk in chunks:
             for ch in list(semantic_chunk.translation_chunks or []):
-                for seg_id in list(ch.segment_ids or []):
-                    if seg_id not in per_chunk_translation:
-                        per_chunk_translation[int(seg_id)] = str(ch.text or "")
+                seg_id = int(ch.segment_id)
+                if seg_id not in per_chunk_translation:
+                    per_chunk_translation[seg_id] = str(ch.text or "")
 
         # Build segment_id -> per-segment translation mapping (evenly split full chunk translation)
         per_segment_translation: dict[int, str] = {}

@@ -25,8 +25,8 @@ def _seed_subtitle_materials(pool, project_id: str) -> None:  # noqa: ANN001
             translation="甲乙",
             asr_segment_ids=[0, 1],
             translation_chunks=[
-                TranslationChunk(text="甲", segment_ids=[0]),
-                TranslationChunk(text="乙", segment_ids=[1]),
+                TranslationChunk(text="甲", segment_id=0),
+                TranslationChunk(text="乙", segment_id=1),
             ],
         )
     ]
@@ -159,7 +159,10 @@ def test_exports_create_from_edited_entries_propagates_per_chunk_group(client, r
         client.app.state.db_pool,
         pid,
         translation="甲乙丙丁",
-        chunks=[TranslationChunk(text="共用", segment_ids=[0, 1])],
+        chunks=[
+            TranslationChunk(text="共用", segment_id=0),
+            TranslationChunk(text="共用", segment_id=1),
+        ],
     )
     _set_project_stage(client.app.state.db_pool, pid, 5)
 
@@ -182,7 +185,7 @@ def test_exports_create_from_edited_entries_propagates_per_chunk_group(client, r
     res = client.get(f"/projects/{pid}/exports/{export_id}/download")
     assert res.status_code == 200
     assert "最终改" in res.text
-    assert "第一次改" not in res.text
+    assert "第一次改" in res.text
     assert "AA" in res.text
 
 
@@ -196,7 +199,10 @@ def test_exports_per_segment_uses_split_full_translation(client, redis, settings
         client.app.state.db_pool,
         pid,
         translation="甲乙丙丁",
-        chunks=[TranslationChunk(text="共用", segment_ids=[0, 1])],
+        chunks=[
+            TranslationChunk(text="共用", segment_id=0),
+            TranslationChunk(text="共用", segment_id=1),
+        ],
     )
     _set_project_stage(client.app.state.db_pool, pid, 5)
 

@@ -44,7 +44,7 @@ class SemanticChunkRepository(BaseRepository):
                                 semantic_chunk_id,
                                 int(i),
                                 str(ch.text or ""),
-                                [int(x) for x in list(ch.segment_ids or [])],
+                                [int(ch.segment_id)],
                             )
                             for i, ch in enumerate(list(chunk.translation_chunks or []))
                         ]
@@ -90,12 +90,14 @@ class SemanticChunkRepository(BaseRepository):
         translations_by_semantic_id: dict[int, list[TranslationChunk]] = {}
         for tr in translation_rows:
             sid = int(tr["semantic_chunk_id"])
-            translations_by_semantic_id.setdefault(sid, []).append(
-                TranslationChunk(
-                    text=str(tr.get("text") or ""),
-                    segment_ids=[int(x) for x in list(tr.get("segment_ids") or [])],
+            text = str(tr.get("text") or "")
+            raw_ids = tr.get("segment_ids") or []
+            if not isinstance(raw_ids, list):
+                raw_ids = []
+            for seg_id in [int(x) for x in list(raw_ids or [])]:
+                translations_by_semantic_id.setdefault(sid, []).append(
+                    TranslationChunk(text=text, segment_id=int(seg_id))
                 )
-            )
 
         out: list[SemanticChunk] = []
         for r in chunk_rows:

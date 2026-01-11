@@ -14,8 +14,8 @@ def test_semantic_chunk_serialization_roundtrip_translation_chunks() -> None:
             translation="dst",
             asr_segment_ids=[0, 1],
             translation_chunks=[
-                TranslationChunk(text="A", segment_ids=[0]),
-                TranslationChunk(text="B", segment_ids=[1]),
+                TranslationChunk(text="A", segment_id=0),
+                TranslationChunk(text="B", segment_id=1),
             ],
         )
     ]
@@ -24,17 +24,18 @@ def test_semantic_chunk_serialization_roundtrip_translation_chunks() -> None:
     restored = deserialize_semantic_chunks(payload)
 
     assert restored[0].translation_chunks[0].text == "A"
-    assert restored[0].translation_chunks[0].segment_ids == [0]
+    assert restored[0].translation_chunks[0].segment_id == 0
     assert restored[0].translation_chunks[1].text == "B"
-    assert restored[0].translation_chunks[1].segment_ids == [1]
+    assert restored[0].translation_chunks[1].segment_id == 1
 
 
 def test_deserialize_semantic_chunks_backfills_missing_translation_chunks() -> None:
     restored = deserialize_semantic_chunks(
         [{"id": 0, "text": "src", "translation": "dst", "asr_segment_ids": [2, 3]}]
     )
-    assert restored[0].translation_chunks[0].text == "dst"
-    assert restored[0].translation_chunks[0].segment_ids == [2, 3]
+    assert len(restored[0].translation_chunks) == 2
+    assert [c.segment_id for c in restored[0].translation_chunks] == [2, 3]
+    assert "".join(c.text for c in restored[0].translation_chunks) == "dst"
 
 
 def test_subtitle_exporter_per_chunk_leaves_uncovered_primary_empty() -> None:
@@ -49,7 +50,7 @@ def test_subtitle_exporter_per_chunk_leaves_uncovered_primary_empty() -> None:
             text="src",
             translation="FULL",
             asr_segment_ids=[0, 1],
-            translation_chunks=[TranslationChunk(text="only0", segment_ids=[0])],
+            translation_chunks=[TranslationChunk(text="only0", segment_id=0)],
         )
     ]
 
@@ -62,4 +63,3 @@ def test_subtitle_exporter_per_chunk_leaves_uncovered_primary_empty() -> None:
 
     assert entries[0].primary_text == "only0"
     assert entries[1].primary_text == ""
-

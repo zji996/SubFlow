@@ -289,7 +289,7 @@ async def test_llm_runner_truncates_asr_segments(settings, monkeypatch) -> None:
                     text="a",
                     translation="甲",
                     asr_segment_ids=[0],
-                    translation_chunks=[TranslationChunk(text="甲", segment_ids=[0])],
+                    translation_chunks=[TranslationChunk(text="甲", segment_id=0)],
                 )
             ]
         }

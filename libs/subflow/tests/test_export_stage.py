@@ -19,7 +19,7 @@ async def test_export_stage_generates_subtitle_text(settings) -> None:
                 text="a",
                 translation="甲",
                 asr_segment_ids=[0],
-                translation_chunks=[TranslationChunk(text="甲", segment_ids=[0])],
+                translation_chunks=[TranslationChunk(text="甲", segment_id=0)],
             )
         ],
     }
@@ -35,4 +35,3 @@ async def test_export_stage_rejects_unknown_format(settings) -> None:
     ctx = {"project_id": "proj_1", "asr_segments": [ASRSegment(id=0, start=0.0, end=1.0, text="a", language="en")]}
     with pytest.raises(ConfigurationError, match="Unknown subtitle format"):
         await stage.execute(ctx)
-

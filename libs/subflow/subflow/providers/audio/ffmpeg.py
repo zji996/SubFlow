@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from subflow.utils.ffmpeg import resolve_ffmpeg_bin
@@ -22,6 +23,18 @@ class FFmpegProvider:
                 f"stdout: {result.stdout.decode(errors='ignore')}\n"
                 f"stderr: {result.stderr.decode(errors='ignore')}"
             )
+
+    async def _run_capture(self, args: list[str]) -> tuple[bytes, bytes]:
+        result = await run_subprocess(args, capture_output=True)
+        if result.returncode != 0:
+            raise RuntimeError(
+                "ffmpeg failed "
+                f"(code={result.returncode}).\n"
+                f"cmd: {' '.join(args)}\n"
+                f"stdout: {result.stdout.decode(errors='ignore')}\n"
+                f"stderr: {result.stderr.decode(errors='ignore')}"
+            )
+        return result.stdout, result.stderr
 
     async def extract_audio(self, video_path: str, output_path: str, max_duration_s: float | None = None) -> str:
         """从视频提取音频，输出 16kHz 单声道 WAV"""
@@ -80,4 +93,65 @@ class FFmpegProvider:
                 output_path,
             ]
         )
+        return output_path
+
+    async def peak_normalize_wav(self, input_path: str, output_path: str, *, target_db: float = -1.0) -> str:
+        """Peak-normalize audio to `target_db` dBFS via ffmpeg volumedetect + volume."""
+        input_path = str(input_path)
+        output_path = str(output_path)
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+
+        input_resolved = Path(input_path).resolve()
+        output_resolved = Path(output_path).resolve()
+        tmp_path = output_path
+        if input_resolved == output_resolved:
+            tmp_path = str(output_resolved.with_suffix(output_resolved.suffix + ".tmp"))
+
+        _, stderr = await self._run_capture(
+            [
+                self.ffmpeg_bin,
+                "-hide_banner",
+                "-nostats",
+                "-y",
+                "-i",
+                input_path,
+                "-af",
+                "volumedetect",
+                "-f",
+                "null",
+                "-",
+            ]
+        )
+        text = stderr.decode(errors="ignore")
+        m = re.search(r"max_volume:\s*([-+]?\d+(?:\.\d+)?)\s*dB", text)
+        if not m:
+            if "max_volume: -inf" in text:
+                gain_db = 0.0
+            else:
+                raise RuntimeError("ffmpeg volumedetect did not return max_volume")
+        else:
+            max_volume_db = float(m.group(1))
+            gain_db = float(target_db) - max_volume_db
+
+        await self._run(
+            [
+                self.ffmpeg_bin,
+                "-y",
+                "-i",
+                input_path,
+                "-af",
+                f"volume={gain_db}dB",
+                "-ar",
+                "16000",
+                "-ac",
+                "1",
+                "-f",
+                "wav",
+                tmp_path,
+            ]
+        )
+
+        if Path(tmp_path).resolve() != output_resolved:
+            Path(tmp_path).replace(output_resolved)
+
         return output_path

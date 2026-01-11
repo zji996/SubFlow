@@ -113,14 +113,15 @@ SubFlow 是一个基于语义理解的视频字幕翻译系统。与传统的逐
 **目标**：从视频中提取纯净人声，为后续处理提供高质量输入。
 
 ```
-┌────────────┐     ┌────────────┐     ┌────────────┐
-│   Video    │────▶│   FFmpeg   │────▶│   Demucs   │────▶ vocals.wav
-│  .mp4/.mkv │     │  提取音频   │     │  人声分离   │
-└────────────┘     └────────────┘     └────────────┘
+┌────────────┐     ┌────────────┐     ┌────────────┐     ┌───────────────┐
+│   Video    │────▶│   FFmpeg   │────▶│   Demucs   │────▶│ FFmpeg Norm.  │────▶ vocals.wav
+│  .mp4/.mkv │     │  提取音频   │     │  人声分离   │     │  峰值归一化     │
+└────────────┘     └────────────┘     └────────────┘     └───────────────┘
 ```
 
 **关键决策**：
 - 人声分离是必要步骤，背景音乐会严重干扰 VAD 和 ASR
+- 默认对人声做峰值归一化（`AUDIO_NORMALIZE=true`，目标 `AUDIO_NORMALIZE_TARGET_DB=-1`）
 - 输出标准化为 16kHz 单声道 WAV
 
 **输入 Artifact**: 原始视频文件
@@ -163,7 +164,7 @@ SubFlow 是一个基于语义理解的视频字幕翻译系统。与传统的逐
 
 **关键决策**：
 - 分段识别策略：每个 VAD segment 独立送入 ASR（时间戳继承自 VAD）
-- 合并识别策略：在每个 VAD region 内将 segments 合并为 ≤30s 的识别块，再做整体 ASR（上下文更完整）
+- 合并识别策略：在每个 VAD region 内将 segments 合并为 ≤`ASR_MAX_CHUNK_S` 的识别块（默认 15s），再做整体 ASR（上下文更完整）
 - 时间戳由 VAD 段边界继承，ASR 仅负责文本输出
 - 可并行处理多个段落
 
@@ -181,6 +182,7 @@ SubFlow 是一个基于语义理解的视频字幕翻译系统。与传统的逐
 
 **并行策略（2026-01）**：
 - 纠错任务以 `asr_merged_chunks` 为单位执行
+- `asr_merged_chunks` 的窗口大小由 `ASR_MAX_CHUNK_S` 控制（默认 15s；与 Stage 3 共享）
 - 当启用 `PARALLEL_ENABLED=true` 时，会基于 `vad_regions` 的 region gap（`PARALLEL_MIN_GAP_SECONDS`）进行分区；分区间可并行处理
 - LLM 并发上限按服务类型控制：`CONCURRENCY_LLM_FAST` / `CONCURRENCY_LLM_POWER`（取决于 `LLM_ASR_CORRECTION=fast|power`）
 
@@ -196,7 +198,7 @@ SubFlow 是一个基于语义理解的视频字幕翻译系统。与传统的逐
 - Pass 1（全局理解）：生成 `global_context`（主题/领域/风格/术语表/翻译注意事项）
 - Pass 2（语义切分+翻译）：从（已纠错的）`asr_segments` 生成 `semantic_chunks`，包含：
   - `translation`：完整意译
-  - `translation_chunks`：翻译分段（1 个 chunk 可覆盖多个段落）
+  - `translation_chunks`：翻译分段（每个 chunk 对应 1 个 `segment_id`；由程序从 `translation` 自动生成）
 
 **并行策略（2026-01）**：
 - Pass 2 在启用 `PARALLEL_ENABLED=true` 时，会按 `vad_regions` 的 region gap 分区；每个分区内部保持贪心串行，分区间并行
@@ -215,7 +217,7 @@ Stage 5 的详细提示词、输入/输出 JSON、以及给 LLM 的实际输入�
 **目标**：将翻译结果导出为标准字幕格式（默认双行字幕）。
 
 - 第一行（主字幕）：根据 `translation_style` 配置
-  - `per_chunk`（默认）：按 `translation_chunks` 分配（同一 chunk 覆盖的段落共享翻译片段）
+  - `per_chunk`（默认）：按 `translation_chunks` 分配（每个段落取其对应 `segment_id` 的翻译片段）
   - `full`：`SemanticChunk.translation`（完整意译，所有段落共享）
 - 第二行（子字幕）：每个 `ASRSegment` 对应的 `ASRCorrectedSegment.text`（若无纠错则回退到 `ASRSegment.text`）
 

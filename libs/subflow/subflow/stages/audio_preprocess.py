@@ -115,6 +115,9 @@ class AudioPreprocessStage(Stage):
             "demucs_bin": str(self.settings.audio.demucs_bin),
             "demucs_model": str(self.settings.audio.demucs_model),
         }
+        if bool(self.settings.audio.normalize):
+            derived_params["normalize"] = True
+            derived_params["normalize_target_db"] = float(self.settings.audio.normalize_target_db)
         cached_vocals_hash = await blob_store.get_derived(
             transform="demucs_vocals",
             src_hash=audio_hash,
@@ -148,6 +151,26 @@ class AudioPreprocessStage(Stage):
                     "Ensure `demucs` is installed in the worker uv env and runnable, and set "
                     "`CUDA_VISIBLE_DEVICES=1` if GPU0 is occupied."
                 ) from exc
+
+            if bool(self.settings.audio.normalize):
+                try:
+                    vocals_path = await self.provider.normalize_audio(
+                        str(vocals_path),
+                        str(vocals_path),
+                        target_db=float(self.settings.audio.normalize_target_db),
+                    )
+                    logger.info(
+                        "normalized vocals (target_db=%.2f, path=%s)",
+                        float(self.settings.audio.normalize_target_db),
+                        vocals_path,
+                    )
+                except Exception as exc:
+                    logger.exception("vocals normalization failed")
+                    raise StageExecutionError(
+                        self.name,
+                        "Audio normalization failed. Ensure `ffmpeg` is installed and runnable, "
+                        "or disable via `AUDIO_NORMALIZE=false`.",
+                    ) from exc
 
         audio_ref = await blob_store.ingest_hashed_file(
             project_id=run_id,

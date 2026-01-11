@@ -12,7 +12,10 @@ def test_srt_export_uses_asr_segment_timestamps_and_dual_line() -> None:
             text="hello",
             translation="你好",
             asr_segment_ids=[2, 3],
-            translation_chunks=[TranslationChunk(text="你好", segment_ids=[2, 3])],
+            translation_chunks=[
+                TranslationChunk(text="你好", segment_id=2),
+                TranslationChunk(text="你好", segment_id=3),
+            ],
         )
     ]
     asr_segments = [
@@ -75,7 +78,7 @@ def test_srt_export_primary_only_excludes_secondary_line() -> None:
             text="hello world",
             translation="你好世界",
             asr_segment_ids=[0],
-            translation_chunks=[TranslationChunk(text="你好世界", segment_ids=[0])],
+            translation_chunks=[TranslationChunk(text="你好世界", segment_id=0)],
         ),
     ]
     asr_segments = [
