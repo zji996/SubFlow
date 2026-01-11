@@ -6,58 +6,57 @@
 
 ## ✨ 特性
 
-- **语义优先**：基于语义块切分，而非机械的时间切分
-- **全局理解**：翻译前通读全文，确保术语一致性
-- **多 Pass 处理**：理解 → 切分 → 翻译 → 审校，层层精化
-- **高质量人声**：Demucs 人声分离，提升 ASR 准确率
+- **语义优先** - 按语义边界智能切分，而非机械时间切分
+- **全局理解** - 翻译前通读全文，术语一致、上下文连贯
+- **多 Pass 处理** - 6 阶段 Pipeline，层层精化
+- **高质量人声** - Demucs 人声分离 + NeMo VAD + GLM-ASR
 
 ## 🏗️ 架构
 
 ```
-视频输入 → 音频预处理 → VAD切分 → ASR识别 → LLM多Pass → 字幕输出
-              ↓            ↓          ↓           ↓           ↓
-          人声分离     时间戳获取   文本转录    语义翻译    SRT/VTT/ASS
+视频 → 音频预处理 → VAD → ASR → ASR纠错 → 语义翻译 → 字幕导出
+         ↓           ↓      ↓       ↓          ↓          ↓
+      人声分离    时间戳   文本    LLM纠错    全局理解    SRT/VTT
 ```
 
-详细架构设计请参阅 [docs/architecture.md](docs/architecture.md)
+详见 [架构设计](docs/architecture.md) | [数据库设计](docs/database.md) | [LLM 多 Pass](docs/llm_multi_pass.md)
 
-## 📖 文档
-
-| 文档 | 说明 |
-|------|------|
-| [架构设计](docs/architecture.md) | 系统整体架构与设计理念 |
-| [Quickstart](docs/quickstart.md) | 本地开发一键启动（uv + manager） |
-| [LLM 多 Pass](docs/llm_multi_pass.md) | Stage 4 提示词与数据模型 |
-| [开发规范](AGENTS.md) | Monorepo 结构、Provider 设计、禁止事项 |
-
-## 🚀 快速开始（本地开发）
+## 🚀 快速开始
 
 ```bash
-# 一键启动（API + Worker + Web）
+# 1. 启动依赖服务
+cd infra && docker-compose -f docker-compose.dev.yml up -d && cd ..
+
+# 2. 配置环境变量
+cp .env.example .env  # 编辑填写 ASR/LLM API Key
+
+# 3. 数据库迁移
+uv run --project apps/api scripts/db_migrate.py
+
+# 4. 一键启动
 bash scripts/manager.sh up
 ```
 
-- API: `http://localhost:8100`（Swagger: `http://localhost:8100/docs`）
-- Web: `http://localhost:5173`
+- **API**: http://localhost:8100 ([Swagger](http://localhost:8100/docs))
+- **Web**: http://localhost:5173
 
-更多说明见 `docs/quickstart.md`。
+详见 [Quickstart](docs/quickstart.md)
 
-## 🧪 测试与类型检查
+## 📚 文档
 
-```bash
-# Worker tests
-uv run --project apps/worker --directory apps/worker --group dev pytest -v
-
-# Core lib type check
-uv run --project libs/subflow --directory libs/subflow --group dev mypy .
-```
+| 文档 | 说明 |
+|------|------|
+| [Quickstart](docs/quickstart.md) | 本地开发完整指南 |
+| [架构设计](docs/architecture.md) | 系统架构与设计理念 |
+| [数据库设计](docs/database.md) | PostgreSQL-First 架构 |
+| [LLM 多 Pass](docs/llm_multi_pass.md) | Stage 4/5 详解 |
+| [开发规范](AGENTS.md) | Monorepo 结构与规范 |
 
 ## 🛠️ 技术栈
 
-- **音频处理**: FFmpeg, Demucs (htdemucs_ft)
-- **语音活动检测**: NeMo MarbleNet Frame-VAD
-- **语音识别**: GLM-ASR-Nano-2512
-- **语义处理**: LLM (GPT-4 / Claude / 本地模型)
+**音频**: FFmpeg, Demucs | **VAD**: NeMo MarbleNet | **ASR**: GLM-ASR  
+**LLM**: GPT-4 / Claude | **后端**: FastAPI | **前端**: React + Vite  
+**存储**: PostgreSQL + MinIO + Redis
 
 ## 📝 License
 

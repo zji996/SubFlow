@@ -36,6 +36,13 @@ uv run --project apps/worker --directory apps/worker \
 在仓库根目录运行：
 
 ```bash
+# 1. 启动依赖服务（如果还没启动）
+cd infra && docker-compose -f docker-compose.dev.yml up -d && cd ..
+
+# 2. 执行数据库迁移（首次或 schema 更新后）
+uv run --project apps/api scripts/db_migrate.py
+
+# 3. 启动服务
 bash scripts/manager.sh up
 ```
 
@@ -51,14 +58,14 @@ bash scripts/manager.sh up
 
 ## 6 阶段 Pipeline（概览）
 
-Stage 顺序与名称：
+Stage 顺序与名称（结构化数据存储在 PostgreSQL，详见 `docs/database.md`）：
 
-1. `audio_preprocess`：抽音频 + 人声分离（Demucs）
-2. `vad`：NeMo VAD 产出 `vad_segments.json` / `vad_regions.json`
-3. `asr`：分段 ASR + 合并块 ASR（产出 `asr_segments.json` / `asr_merged_chunks.json`）
-4. `llm_asr_correction`：用合并块 ASR 纠错分段 ASR（产出 `asr_corrected_segments.json`）
-5. `llm`：全局理解 + 语义切分+翻译（产出 `global_context.json` / `semantic_chunks.json`）
-6. `export`：导出字幕（`subtitles.srt`，双行字幕）
+1. `audio_preprocess`：抽音频 + 人声分离（Demucs）→ BlobStore
+2. `vad`：NeMo VAD → `vad_segments` 表
+3. `asr`：分段 ASR + 合并块 ASR → `asr_segments` 表
+4. `llm_asr_correction`：用合并块 ASR 纠错分段 ASR → 更新 `asr_segments.corrected_text`
+5. `llm`：全局理解 + 语义切分+翻译 → `global_contexts` / `semantic_chunks` / `translation_chunks` 表
+6. `export`：导出字幕（`subtitles.srt`，双行字幕）→ S3/MinIO
 
 ## 常用命令
 

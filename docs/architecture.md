@@ -9,8 +9,9 @@
 3. [整体架构](#整体架构)
 4. [流水线阶段](#流水线阶段)
 5. [数据流设计](#数据流设计)
-6. [核心抽象](#核心抽象)
-7. [扩展点](#扩展点)
+6. [数据存储架构](#数据存储架构)
+7. [核心抽象](#核心抽象)
+8. [扩展点](#扩展点)
 
 ---
 
@@ -99,7 +100,8 @@ SubFlow 是一个基于语义理解的视频字幕翻译系统。与传统的逐
 |------|------|
 | **Pipeline Orchestrator** | 编排各阶段执行顺序，处理错误恢复，管理整体进度 |
 | **Stage (阶段)** | 完成特定处理任务，输入/输出均为标准化的 Artifact |
-| **Artifact Store** | 持久化中间产物，支持断点续跑和结果复用 |
+| **Repository 层** | 数据库访问抽象，封装 PostgreSQL 操作 |
+| **Artifact Store** | 二进制文件存储（音视频等） |
 | **External Services** | 实际的计算引擎，通过适配器模式接入 |
 
 ---
@@ -263,6 +265,48 @@ Artifact
 
 ---
 
+## 数据存储架构
+
+SubFlow 采用 **PostgreSQL-First** 架构，详细请参考 [`docs/database.md`](./database.md)。
+
+### 存储分层
+
+| 数据类型 | 存储位置 | 说明 |
+|----------|----------|------|
+| 项目元数据 | PostgreSQL `projects` 表 | 持久化，支持 SQL 查询 |
+| Stage 运行记录 | PostgreSQL `stage_runs` 表 | 独立表，易扩展 |
+| VAD/ASR 结果 | PostgreSQL | 支持按时间范围查询 |
+| 语义块/翻译 | PostgreSQL | 支持条件查询 |
+| 二进制文件 | BlobStore (CAS) | 基于 SHA256 的内容寻址存储 |
+| 导出字幕文件 | S3/MinIO | 保持现有路径格式 |
+| Redis | 任务队列 | `subflow:projects:queue` |
+
+### Repository 模式
+
+所有数据库操作通过 Repository 封装：
+
+```
+libs/subflow/subflow/repositories/
+├── project_repo.py       # ProjectRepository
+├── stage_run_repo.py     # StageRunRepository
+├── vad_segment_repo.py   # VADSegmentRepository
+├── asr_segment_repo.py   # ASRSegmentRepository
+├── global_context_repo.py
+├── semantic_chunk_repo.py
+└── subtitle_export_repo.py
+```
+
+### 数据库迁移
+
+```bash
+# 执行迁移
+uv run --project apps/api scripts/db_migrate.py
+```
+
+详细的 Schema 定义见 `infra/migrations/001_init.sql`。
+
+---
+
 ## 核心抽象
 
 ### Stage 接口
@@ -382,5 +426,5 @@ SubFlow 方案：语义块切分
 
 ---
 
-*文档版本: 0.1.0*
-*最后更新: 2026-01-06*
+*文档版本: 0.2.0*
+*最后更新: 2026-01-11*
