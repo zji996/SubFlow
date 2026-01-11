@@ -90,3 +90,27 @@ def test_build_entries_translation_style_per_chunk_and_full() -> None:
     full = exporter.build_entries(chunks, asr_segments, corrected, translation_style=TranslationStyle.FULL)
     assert [e.primary_text for e in full] == ["全翻译", "全翻译"]
 
+
+def test_build_entries_translation_style_per_segment_splits_full_translation() -> None:
+    exporter = SubtitleExporter()
+    chunks = [
+        SemanticChunk(
+            id=0,
+            text="a b",
+            translation="甲乙丙丁",
+            asr_segment_ids=[0, 1],
+            translation_chunks=[TranslationChunk(text="共用", segment_ids=[0, 1])],
+        )
+    ]
+    asr_segments = [
+        ASRSegment(id=0, start=0.0, end=1.0, text="a", language="en"),
+        ASRSegment(id=1, start=1.0, end=2.0, text="b", language="en"),
+    ]
+
+    per_segment = exporter.build_entries(
+        chunks,
+        asr_segments,
+        asr_corrected_segments=None,
+        translation_style=TranslationStyle.PER_SEGMENT,
+    )
+    assert [e.primary_text for e in per_segment] == ["甲乙", "丙丁"]

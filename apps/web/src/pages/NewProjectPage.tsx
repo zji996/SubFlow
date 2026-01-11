@@ -1,6 +1,7 @@
 import { useState, useRef, DragEvent, ChangeEvent } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { createProject } from '../api/projects'
+import { uploadFile, type UploadProgress } from '../api/uploads'
 import { Spinner } from '../components/common/Spinner'
 
 const languages = [
@@ -28,17 +29,18 @@ export default function NewProjectPage() {
     const [loading, setLoading] = useState(false)
     const [error, setError] = useState<string | null>(null)
     const [isDragOver, setIsDragOver] = useState(false)
+    const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null)
 
     const uploadZoneClass = `group relative flex flex-col items-center justify-center gap-4 px-8 py-12 border-2 rounded-2xl cursor-pointer transition-all ${selectedFile
-            ? 'border-[--color-success] border-solid bg-[rgba(16,185,129,0.05)]'
-            : isDragOver
-                ? 'border-[--color-primary] border-dashed bg-[rgba(99,102,241,0.1)] shadow-[var(--shadow-glow-primary)]'
-                : 'border-[--color-border-light] border-dashed bg-[rgba(15,23,42,0.4)] hover:border-[--color-primary] hover:bg-[rgba(99,102,241,0.05)]'
+        ? 'border-[--color-success] border-solid bg-[rgba(16,185,129,0.05)]'
+        : isDragOver
+            ? 'border-[--color-primary] border-dashed bg-[rgba(99,102,241,0.1)] shadow-[var(--shadow-glow-primary)]'
+            : 'border-[--color-border-light] border-dashed bg-[rgba(15,23,42,0.4)] hover:border-[--color-primary] hover:bg-[rgba(99,102,241,0.05)]'
         }`
 
     const uploadIconClass = `w-16 h-16 flex items-center justify-center rounded-2xl transition-all ${selectedFile
-            ? 'bg-gradient-to-br from-[rgba(16,185,129,0.2)] to-[rgba(52,211,153,0.2)] text-[--color-success-light]'
-            : 'bg-gradient-to-br from-[rgba(99,102,241,0.2)] to-[rgba(168,85,247,0.2)] text-[--color-primary-light] group-hover:scale-105 group-hover:from-[rgba(99,102,241,0.3)] group-hover:to-[rgba(168,85,247,0.3)]'
+        ? 'bg-gradient-to-br from-[rgba(16,185,129,0.2)] to-[rgba(52,211,153,0.2)] text-[--color-success-light]'
+        : 'bg-gradient-to-br from-[rgba(99,102,241,0.2)] to-[rgba(168,85,247,0.2)] text-[--color-primary-light] group-hover:scale-105 group-hover:from-[rgba(99,102,241,0.3)] group-hover:to-[rgba(168,85,247,0.3)]'
         }`
 
     const handleDragOver = (e: DragEvent<HTMLDivElement>) => {
@@ -132,23 +134,29 @@ export default function NewProjectPage() {
 
         setLoading(true)
         setError(null)
+        setUploadProgress(null)
 
         try {
-            // If file selected, we need to get its absolute path
-            // Since we can't directly get file path in browser, we use the file name
-            // The backend should handle file upload separately (future enhancement)
-            // For now, if using file, show a note about using local path
             let finalMediaUrl = mediaUrl.trim()
-            if (selectedFile && !mediaUrl) {
-                // Show file path hint - user needs to provide actual path
-                // In a real implementation, we would upload the file first
-                setError('请在下方输入该文件的服务器本地路径，或使用 URL 链接')
-                setLoading(false)
-                return
+
+            // If file selected, upload it first
+            if (selectedFile && !mediaUrl.trim()) {
+                try {
+                    const uploadResult = await uploadFile(selectedFile, (progress) => {
+                        setUploadProgress(progress)
+                    })
+                    finalMediaUrl = uploadResult.media_url
+                } catch (uploadErr) {
+                    if (uploadErr instanceof DOMException && uploadErr.name === 'AbortError') {
+                        setLoading(false)
+                        return
+                    }
+                    throw new Error(`文件上传失败: ${uploadErr instanceof Error ? uploadErr.message : '未知错误'}`)
+                }
             }
 
             const project = await createProject({
-                name: (name.trim() || selectedFile?.name || 'Untitled').slice(0, 100),
+                name: (name.trim() || selectedFile?.name?.replace(/\.[^/.]+$/, '') || 'Untitled').slice(0, 100),
                 media_url: finalMediaUrl,
                 language: sourceLanguage || undefined,
                 target_language: targetLanguage,
@@ -158,6 +166,7 @@ export default function NewProjectPage() {
             setError(err instanceof Error ? err.message : '创建项目失败')
         } finally {
             setLoading(false)
+            setUploadProgress(null)
         }
     }
 
@@ -352,7 +361,11 @@ export default function NewProjectPage() {
                         {loading ? (
                             <>
                                 <Spinner size="sm" />
-                                <span>创建中...</span>
+                                <span>
+                                    {uploadProgress
+                                        ? `上传中 ${uploadProgress.percent}%`
+                                        : '创建中...'}
+                                </span>
                             </>
                         ) : (
                             <>
@@ -363,6 +376,22 @@ export default function NewProjectPage() {
                             </>
                         )}
                     </button>
+
+                    {/* Upload Progress Bar */}
+                    {uploadProgress && (
+                        <div className="animate-fade-in">
+                            <div className="flex justify-between text-xs text-[--color-text-muted] mb-1">
+                                <span>上传进度</span>
+                                <span>{uploadProgress.percent}%</span>
+                            </div>
+                            <div className="h-2 rounded-full bg-[--color-bg-elevated] overflow-hidden">
+                                <div
+                                    className="h-full bg-gradient-to-r from-[--color-primary] to-[--color-accent] transition-all duration-300"
+                                    style={{ width: `${uploadProgress.percent}%` }}
+                                />
+                            </div>
+                        </div>
+                    )}
                 </div>
             </form>
 

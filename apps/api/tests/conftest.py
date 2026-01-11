@@ -85,11 +85,13 @@ def redis() -> FakeRedis:
 @pytest.fixture()
 def app(settings: Settings, redis: FakeRedis) -> FastAPI:
     from routes.projects import router as projects_router
+    from routes.uploads import router as uploads_router
 
     test_app = FastAPI()
     test_app.state.redis = redis
     test_app.state.settings = settings
     test_app.include_router(projects_router)
+    test_app.include_router(uploads_router)
     return test_app
 
 

@@ -8,6 +8,7 @@ from redis.asyncio import Redis
 
 from subflow.config import Settings
 from routes.projects import router as projects_router
+from routes.uploads import router as uploads_router
 from subflow.utils.logging_setup import setup_logging
 
 settings = Settings()
@@ -37,6 +38,7 @@ app = FastAPI(
 
 
 app.include_router(projects_router)
+app.include_router(uploads_router)
 
 
 @app.get("/health")

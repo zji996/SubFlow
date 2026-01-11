@@ -24,6 +24,8 @@ from subflow.models.serializers import (
     deserialize_asr_corrected_segments,
     deserialize_asr_segments,
     deserialize_semantic_chunks,
+    serialize_asr_segments,
+    serialize_semantic_chunks,
 )
 from subflow.models.subtitle_types import (
     AssStyleConfig,
@@ -80,11 +82,35 @@ class SubtitlePreviewResponse(BaseModel):
     total: int
 
 
+class SubtitleEditComputedEntry(BaseModel):
+    segment_id: int
+    start: float
+    end: float
+    secondary: str
+    primary_per_chunk: str
+    primary_full: str
+    primary_per_segment: str
+    semantic_chunk_id: int | None = None
+
+
+class SubtitleEditDataResponse(BaseModel):
+    asr_segments: list[dict[str, Any]]
+    asr_corrected_segments: dict[int, dict[str, Any]]
+    semantic_chunks: list[dict[str, Any]]
+    computed_entries: list[SubtitleEditComputedEntry]
+
+
 class CreateSubtitleExportEntry(BaseModel):
     start: float
     end: float
     primary_text: str = ""
     secondary_text: str = ""
+
+
+class EditedSubtitleExportEntry(BaseModel):
+    segment_id: int
+    secondary: str | None = None
+    primary: str | None = None
 
 
 class CreateSubtitleExportRequest(BaseModel):
@@ -94,6 +120,7 @@ class CreateSubtitleExportRequest(BaseModel):
     translation_style: str = "per_chunk"
     ass_style: dict[str, Any] | None = None
     entries: list[CreateSubtitleExportEntry] | None = None
+    edited_entries: list[EditedSubtitleExportEntry] | None = None
 
 
 class SubtitleExportResponse(BaseModel):
@@ -420,6 +447,11 @@ async def create_export(
     entries_name: str | None = None
     entries_key: str | None = None
     source = SubtitleExportSource.AUTO
+    generated_entries: list[SubtitleEntry] | None = None
+    generated_segment_ids: list[int] | None = None
+
+    if payload.entries and payload.edited_entries:
+        raise HTTPException(status_code=400, detail="entries and edited_entries are mutually exclusive")
 
     if payload.entries:
         source = SubtitleExportSource.EDITED
@@ -450,7 +482,117 @@ async def create_export(
                     secondary_text=secondary,
                 )
             )
-        subtitle_text = SubtitleExporter().export_entries(entries, config)
+        generated_entries = entries
+        subtitle_text = SubtitleExporter().export_entries(generated_entries, config)
+    elif payload.edited_entries:
+        source = SubtitleExportSource.EDITED
+        chunks, asr_segments, corrected = await _load_subtitle_materials(settings, project)
+        if not asr_segments:
+            raise HTTPException(status_code=404, detail="ASR 数据不存在")
+
+        corrected_by_asr_id: dict[int, ASRCorrectedSegment] = {}
+        for seg in list((corrected or {}).values()):
+            corrected_by_asr_id[int(seg.asr_segment_id)] = seg
+
+        chunk_by_segment_id: dict[int, SemanticChunk] = {}
+        for semantic_chunk in chunks:
+            for seg_id in list(semantic_chunk.asr_segment_ids or []):
+                chunk_by_segment_id.setdefault(int(seg_id), semantic_chunk)
+
+        per_chunk_translation: dict[int, str] = {}
+        translation_chunk_key_by_segment_id: dict[int, tuple[int, int]] = {}
+        for semantic_chunk in chunks:
+            for idx, ch in enumerate(list(semantic_chunk.translation_chunks or [])):
+                key = (int(semantic_chunk.id), int(idx))
+                for seg_id in list(ch.segment_ids or []):
+                    per_chunk_translation.setdefault(int(seg_id), str(ch.text or "").strip())
+                    translation_chunk_key_by_segment_id.setdefault(int(seg_id), key)
+
+        ordered_segments = sorted(asr_segments, key=lambda s: (float(s.start), float(s.end), int(s.id)))
+        segment_order = {int(seg.id): i for i, seg in enumerate(ordered_segments)}
+
+        per_segment_translation: dict[int, str] = {}
+        for semantic_chunk in chunks:
+            seg_ids = [int(x) for x in list(semantic_chunk.asr_segment_ids or [])]
+            seg_ids_in_order = [sid for sid in seg_ids if sid in segment_order]
+            seg_ids_in_order.sort(key=lambda sid: segment_order[sid])
+            if not seg_ids_in_order:
+                continue
+            slices = _split_text_evenly(str(semantic_chunk.translation or "").strip(), len(seg_ids_in_order))
+            for sid, piece in zip(seg_ids_in_order, slices, strict=False):
+                per_segment_translation[int(sid)] = str(piece).strip()
+
+        def _primary_group_key(segment_id: int) -> tuple[str, int, int] | tuple[str, int]:
+            seg_id = int(segment_id)
+            match translation_style:
+                case TranslationStyle.PER_CHUNK:
+                    if seg_id in translation_chunk_key_by_segment_id:
+                        scid, idx = translation_chunk_key_by_segment_id[seg_id]
+                        return ("translation_chunk", int(scid), int(idx))
+                    return ("segment", seg_id)
+                case TranslationStyle.FULL:
+                    chunk = chunk_by_segment_id.get(seg_id)
+                    if chunk is not None:
+                        return ("semantic_chunk", int(chunk.id))
+                    return ("segment", seg_id)
+                case _:
+                    return ("segment", seg_id)
+
+        primary_override_by_group: dict[tuple[str, int, int] | tuple[str, int], str] = {}
+        secondary_override_by_segment: dict[int, str] = {}
+        known_segment_ids = set(segment_order.keys())
+
+        for edited in payload.edited_entries:
+            seg_id = int(edited.segment_id)
+            if seg_id not in known_segment_ids:
+                raise HTTPException(status_code=400, detail=f"unknown segment_id: {seg_id}")
+            if edited.secondary is not None:
+                secondary_override_by_segment[seg_id] = str(edited.secondary)
+            if edited.primary is not None:
+                primary_override_by_group[_primary_group_key(seg_id)] = str(edited.primary)
+
+        items: list[tuple[float, float, int, str, str]] = []
+        for seg in ordered_segments:
+            seg_id = int(seg.id)
+            corrected_seg = corrected_by_asr_id.get(seg_id)
+            secondary = (
+                (str(corrected_seg.text).strip() if corrected_seg is not None else "")
+                or str(seg.text or "").strip()
+            )
+
+            match translation_style:
+                case TranslationStyle.PER_CHUNK:
+                    primary = str(per_chunk_translation.get(seg_id, "") or "").strip()
+                case TranslationStyle.FULL:
+                    chunk_for_seg = chunk_by_segment_id.get(seg_id)
+                    primary = str((chunk_for_seg.translation if chunk_for_seg is not None else "") or "").strip()
+                case _:
+                    primary = str(per_segment_translation.get(seg_id, "") or "").strip()
+
+            primary = primary_override_by_group.get(_primary_group_key(seg_id), primary)
+            secondary = secondary_override_by_segment.get(seg_id, secondary)
+
+            if not primary and not secondary:
+                continue
+            start, end = float(seg.start), float(seg.end)
+            items.append((start, end, seg_id, primary, secondary))
+
+        items.sort(key=lambda x: (x[0], x[1], x[2]))
+        generated_entries = []
+        generated_segment_ids = []
+        for idx, (start, end, _, primary, secondary) in enumerate(items, start=1):
+            generated_segment_ids.append(int(_))
+            generated_entries.append(
+                SubtitleEntry(
+                    index=idx,
+                    start=float(start),
+                    end=float(end),
+                    primary_text=str(primary or "").strip(),
+                    secondary_text=str(secondary or "").strip(),
+                )
+            )
+
+        subtitle_text = SubtitleExporter().export_entries(generated_entries, config)
     else:
         chunks, asr_segments, corrected = await _load_subtitle_materials(settings, project)
         if not asr_segments:
@@ -468,18 +610,32 @@ async def create_export(
     storage_name = f"{export_id}.{fmt.value}"
     storage_key = await store.save_text(project_id, storage_stage, storage_name, subtitle_text)
 
-    if payload.entries:
+    if generated_entries is not None:
         entries_name = f"{export_id}.entries.json"
-        entries_payload = [
-            {
-                "index": int(e.index),
-                "start": float(e.start),
-                "end": float(e.end),
-                "primary_text": str(e.primary_text or ""),
-                "secondary_text": str(e.secondary_text or ""),
-            }
-            for e in entries
-        ]
+        if payload.entries:
+            entries_payload = [
+                {
+                    "index": int(e.index),
+                    "start": float(e.start),
+                    "end": float(e.end),
+                    "primary_text": str(e.primary_text or ""),
+                    "secondary_text": str(e.secondary_text or ""),
+                }
+                for e in generated_entries
+            ]
+        else:
+            segment_ids = list(generated_segment_ids or [])
+            entries_payload = [
+                {
+                    "segment_id": int(segment_ids[i - 1]),
+                    "index": int(e.index),
+                    "start": float(e.start),
+                    "end": float(e.end),
+                    "primary_text": str(e.primary_text or ""),
+                    "secondary_text": str(e.secondary_text or ""),
+                }
+                for i, e in enumerate(generated_entries, start=1)
+            ]
         entries_key = await store.save_json(project_id, storage_stage, entries_name, entries_payload)
 
     config_json = json.dumps(
@@ -622,6 +778,97 @@ async def preview_subtitles(
         )
 
     return SubtitlePreviewResponse(entries=out, total=len(out))
+
+
+def _split_text_evenly(text: str, parts: int) -> list[str]:
+    cleaned = str(text or "")
+    if parts <= 0:
+        return []
+    if parts == 1:
+        return [cleaned]
+    n = len(cleaned)
+    out: list[str] = []
+    for i in range(parts):
+        start = round(i * n / parts)
+        end = round((i + 1) * n / parts)
+        out.append(cleaned[start:end])
+    return out
+
+
+@router.get("/{project_id}/subtitles/edit-data", response_model=SubtitleEditDataResponse)
+async def get_subtitle_edit_data(request: Request, project_id: str) -> SubtitleEditDataResponse:
+    service = _service(request)
+    project = await service.get_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="project not found")
+
+    settings: Settings | None = getattr(request.app.state, "settings", None)
+    if settings is None:
+        raise HTTPException(status_code=500, detail="settings not initialized")
+
+    chunks, asr_segments, corrected = await _load_subtitle_materials(settings, project)
+    if not asr_segments:
+        raise HTTPException(status_code=404, detail="ASR 数据不存在")
+
+    corrected_by_asr_id: dict[int, ASRCorrectedSegment] = {}
+    for seg in list((corrected or {}).values()):
+        corrected_by_asr_id[int(seg.asr_segment_id)] = seg
+
+    chunk_by_segment_id: dict[int, SemanticChunk] = {}
+    for semantic_chunk in chunks:
+        for seg_id in list(semantic_chunk.asr_segment_ids or []):
+            chunk_by_segment_id.setdefault(int(seg_id), semantic_chunk)
+
+    per_chunk_translation: dict[int, str] = {}
+    for semantic_chunk in chunks:
+        for ch in list(semantic_chunk.translation_chunks or []):
+            for seg_id in list(ch.segment_ids or []):
+                per_chunk_translation.setdefault(int(seg_id), str(ch.text or "").strip())
+
+    segment_order: dict[int, int] = {}
+    ordered_segments = sorted(asr_segments, key=lambda s: (float(s.start), float(s.end), int(s.id)))
+    for i, seg in enumerate(ordered_segments):
+        segment_order[int(seg.id)] = i
+
+    per_segment_translation: dict[int, str] = {}
+    for semantic_chunk in chunks:
+        seg_ids = [int(x) for x in list(semantic_chunk.asr_segment_ids or [])]
+        seg_ids_in_order = [sid for sid in seg_ids if sid in segment_order]
+        seg_ids_in_order.sort(key=lambda sid: segment_order[sid])
+        if not seg_ids_in_order:
+            continue
+        slices = _split_text_evenly(str(semantic_chunk.translation or "").strip(), len(seg_ids_in_order))
+        for sid, piece in zip(seg_ids_in_order, slices, strict=False):
+            per_segment_translation[int(sid)] = str(piece).strip()
+
+    computed: list[SubtitleEditComputedEntry] = []
+    for seg in ordered_segments:
+        corrected_seg = corrected_by_asr_id.get(int(seg.id))
+        secondary = (str(corrected_seg.text).strip() if corrected_seg is not None else "") or str(seg.text or "").strip()
+        chunk_for_seg = chunk_by_segment_id.get(int(seg.id))
+        semantic_chunk_id = int(chunk_for_seg.id) if chunk_for_seg is not None else None
+        computed.append(
+            SubtitleEditComputedEntry(
+                segment_id=int(seg.id),
+                start=float(seg.start),
+                end=float(seg.end),
+                secondary=secondary,
+                primary_per_chunk=str(per_chunk_translation.get(int(seg.id), "") or "").strip(),
+                primary_full=str((chunk_for_seg.translation if chunk_for_seg is not None else "") or "").strip(),
+                primary_per_segment=str(per_segment_translation.get(int(seg.id), "") or "").strip(),
+                semantic_chunk_id=semantic_chunk_id,
+            )
+        )
+
+    return SubtitleEditDataResponse(
+        asr_segments=serialize_asr_segments(ordered_segments),
+        asr_corrected_segments={
+            int(asr_id): {"id": int(seg.id), "asr_segment_id": int(seg.asr_segment_id), "text": seg.text}
+            for asr_id, seg in corrected_by_asr_id.items()
+        },
+        semantic_chunks=serialize_semantic_chunks(chunks),
+        computed_entries=computed,
+    )
 
 
 @router.get("/{project_id}/subtitles/download")

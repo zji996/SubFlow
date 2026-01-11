@@ -31,6 +31,14 @@ const positionOptions: { value: PrimaryPosition; label: string; description: str
     { value: 'bottom', label: '翻译在下', description: '原文显示在第一行' },
 ]
 
+type TranslationStyle = 'per_chunk' | 'full' | 'per_segment'
+
+const translationStyleOptions: { value: TranslationStyle; label: string; description: string }[] = [
+    { value: 'per_chunk', label: '按翻译分段', description: '每个翻译片段对应一个或多个原文段落' },
+    { value: 'full', label: '完整意译', description: '每行显示语义块的完整翻译' },
+    { value: 'per_segment', label: '均分翻译', description: '翻译按原文段落数量均分' },
+]
+
 export function SubtitleExportPanel({ projectId, hasLLMCompleted }: SubtitleExportPanelProps) {
     const [format, setFormat] = useState<ExportFormat>('srt')
     const [content, setContent] = useState<ContentMode>('both')
@@ -40,6 +48,7 @@ export function SubtitleExportPanel({ projectId, hasLLMCompleted }: SubtitleExpo
     const [exportsLoading, setExportsLoading] = useState(false)
     const [exportsError, setExportsError] = useState<string | null>(null)
     const [isSaving, setIsSaving] = useState(false)
+    const [translationStyle, setTranslationStyle] = useState<TranslationStyle>('per_chunk')
 
     const downloadHref = getDownloadSubtitlesUrl(projectId, {
         format,
@@ -84,7 +93,7 @@ export function SubtitleExportPanel({ projectId, hasLLMCompleted }: SubtitleExpo
                 format,
                 content,
                 primary_position: position,
-                translation_style: 'per_chunk',
+                translation_style: translationStyle,
             })
             setExports((prev) => [exp, ...prev.filter((x) => x.id !== exp.id)])
 
@@ -201,6 +210,28 @@ export function SubtitleExportPanel({ projectId, hasLLMCompleted }: SubtitleExpo
                 </div>
             )}
 
+            {/* Translation Style (only for primary modes) */}
+            {content !== 'secondary_only' && (
+                <div className="mb-6 animate-fade-in">
+                    <label className="block text-sm font-medium mb-3">📝 翻译样式</label>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                        {translationStyleOptions.map((opt) => (
+                            <button
+                                key={opt.value}
+                                onClick={() => setTranslationStyle(opt.value)}
+                                className={`p-3 rounded-xl border text-left transition-all ${translationStyle === opt.value
+                                    ? 'border-[--color-primary] bg-[--color-primary]/10'
+                                    : 'border-[--color-border] hover:border-[--color-border-light] hover:bg-[--color-bg-hover]'
+                                    }`}
+                            >
+                                <div className="font-medium mb-1">{opt.label}</div>
+                                <p className="text-xs text-[--color-text-muted]">{opt.description}</p>
+                            </button>
+                        ))}
+                    </div>
+                </div>
+            )}
+
             {/* Preview Summary */}
             <div className="p-4 rounded-xl bg-[--color-bg]/50 border border-[--color-border] mb-6">
                 <div className="text-sm text-[--color-text-muted] mb-2">导出配置预览</div>
@@ -214,6 +245,11 @@ export function SubtitleExportPanel({ projectId, hasLLMCompleted }: SubtitleExpo
                     {content === 'both' && (
                         <span className="px-2 py-1 rounded-lg bg-[--color-bg-elevated] text-[--color-text-secondary] text-xs">
                             {positionOptions.find(p => p.value === position)?.label}
+                        </span>
+                    )}
+                    {content !== 'secondary_only' && (
+                        <span className="px-2 py-1 rounded-lg bg-[--color-bg-elevated] text-[--color-text-secondary] text-xs">
+                            {translationStyleOptions.find(s => s.value === translationStyle)?.label}
                         </span>
                     )}
                 </div>

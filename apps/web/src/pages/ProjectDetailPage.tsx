@@ -14,6 +14,7 @@ import {
 import { Spinner } from '../components/common/Spinner'
 import { StatusBadge } from '../components/common/StatusBadge'
 import { SubtitleExportPanel } from '../components/project/SubtitleExportPanel'
+import { SubtitleEditor } from '../components/project/SubtitleEditor'
 import { usePolling } from '../hooks/usePolling'
 
 const stageOrder: { index: number; name: StageName; label: string }[] = [
@@ -37,6 +38,7 @@ export default function ProjectDetailPage() {
     const [artifactPreview, setArtifactPreview] = useState<ArtifactContentResponse | null>(null)
     const [artifactLoading, setArtifactLoading] = useState(false)
     const [artifactError, setArtifactError] = useState<string | null>(null)
+    const [showEditor, setShowEditor] = useState(false)
 
     const fetcher = useCallback((signal: AbortSignal) => {
         if (!projectId) throw new Error('No project ID')
@@ -204,12 +206,20 @@ export default function ProjectDetailPage() {
                                 <div className="text-xs text-[--color-text-muted]">所有阶段已成功完成，可以导出字幕</div>
                             </div>
                         </div>
-                        <button onClick={handleDelete} className="btn-danger">
-                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                            </svg>
-                            删除
-                        </button>
+                        <div className="flex items-center gap-2">
+                            <button onClick={() => setShowEditor(true)} className="btn-primary">
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                                </svg>
+                                编辑字幕
+                            </button>
+                            <button onClick={handleDelete} className="btn-danger">
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                </svg>
+                                删除
+                            </button>
+                        </div>
                     </div>
                 ) : (
                     <div className="flex flex-wrap gap-3">
@@ -416,6 +426,14 @@ export default function ProjectDetailPage() {
                 <SubtitleExportPanel
                     projectId={projectId}
                     hasLLMCompleted={hasLLMCompleted}
+                />
+            )}
+
+            {/* Subtitle Editor Modal */}
+            {showEditor && projectId && (
+                <SubtitleEditor
+                    projectId={projectId}
+                    onClose={() => setShowEditor(false)}
                 />
             )}
         </div>

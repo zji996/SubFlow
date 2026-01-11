@@ -176,6 +176,7 @@ class Settings(BaseSettings):
     models_dir: str = "./models"
     data_dir: str = "./data"
     log_dir: str = "./logs"
+    upload_max_bytes: int = Field(default=10 * 1024 * 1024 * 1024, ge=1)
 
     # Database
     postgres_user: str = "postgres"
