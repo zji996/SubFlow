@@ -7,6 +7,7 @@ export interface DownloadSubtitlesParams {
     format: ExportFormat
     content: ContentMode
     primary_position: PrimaryPosition
+    translation_style?: TranslationStyle
 }
 
 export function getDownloadSubtitlesUrl(projectId: string, params: DownloadSubtitlesParams): string {
@@ -14,6 +15,7 @@ export function getDownloadSubtitlesUrl(projectId: string, params: DownloadSubti
         format: params.format,
         content: params.content,
         primary_position: params.primary_position,
+        translation_style: params.translation_style || 'per_chunk',
     })
     return `/api/projects/${projectId}/subtitles/download?${qs.toString()}`
 }

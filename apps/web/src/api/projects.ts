@@ -42,22 +42,6 @@ export interface CreateProjectRequest {
     target_language: string
 }
 
-export type ArtifactContentResponse =
-    | {
-        project_id: string
-        stage: StageName
-        name: string
-        kind: 'json'
-        data: unknown
-    }
-    | {
-        project_id: string
-        stage: StageName
-        name: string
-        kind: 'text'
-        data: string
-    }
-
 export async function createProject(data: CreateProjectRequest, options?: ApiRequestOptions): Promise<Project> {
     return apiRequest<Project>('/projects', { ...options, method: 'POST', json: data })
 }
@@ -83,16 +67,4 @@ export async function deleteProject(
     options?: ApiRequestOptions,
 ): Promise<{ deleted: boolean; project_id: string }> {
     return apiRequest<{ deleted: boolean; project_id: string }>(`/projects/${id}`, { ...options, method: 'DELETE' })
-}
-
-export async function getArtifactContent(
-    projectId: string,
-    stage: StageName,
-    artifactName: string,
-    options?: ApiRequestOptions,
-): Promise<ArtifactContentResponse> {
-    return apiRequest<ArtifactContentResponse>(
-        `/projects/${projectId}/artifacts/${stage}/${encodeURIComponent(artifactName)}`,
-        options,
-    )
 }

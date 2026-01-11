@@ -119,8 +119,10 @@ class _Runner:
         *,
         settings,  # noqa: ANN001
         store,  # noqa: ANN001
+        project_repo,  # noqa: ANN001, ARG002
         vad_repo,  # noqa: ANN001, ARG002
         asr_repo,  # noqa: ANN001, ARG002
+        asr_merged_chunk_repo,  # noqa: ANN001, ARG002
         global_context_repo,  # noqa: ANN001, ARG002
         semantic_chunk_repo,  # noqa: ANN001, ARG002
         project,  # noqa: ANN001, ARG002
@@ -197,6 +199,7 @@ async def test_orchestrator_runs_and_marks_completed(settings, monkeypatch) -> N
         stage_run_repo=stage_run_repo,
         vad_repo=noop,
         asr_repo=noop,
+        asr_merged_chunk_repo=noop,
         global_context_repo=noop,
         semantic_chunk_repo=noop,
         on_project_update=on_update,
@@ -231,6 +234,7 @@ async def test_orchestrator_error_sets_failed_status_and_error_code(settings, mo
         stage_run_repo=stage_run_repo,
         vad_repo=noop,
         asr_repo=noop,
+        asr_merged_chunk_repo=noop,
         global_context_repo=noop,
         semantic_chunk_repo=noop,
     )

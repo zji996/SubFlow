@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import mimetypes
 import os
@@ -105,6 +106,25 @@ class BlobStore:
                     );
                     """
                 )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS derived_blobs (
+                      key VARCHAR(64) PRIMARY KEY,
+                      transform VARCHAR(64) NOT NULL,
+                      src_hash VARCHAR(64) NOT NULL,
+                      dst_hash VARCHAR(64) NOT NULL,
+                      params_json JSONB,
+                      created_at TIMESTAMP DEFAULT NOW(),
+                      updated_at TIMESTAMP DEFAULT NOW()
+                    );
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS derived_blobs_src_transform_idx
+                    ON derived_blobs (src_hash, transform);
+                    """
+                )
             conn.commit()
 
     def _redis(self) -> Any:
@@ -125,6 +145,79 @@ class BlobStore:
             return str(content_type).split(";", 1)[0].strip() or None
         guess, _ = mimetypes.guess_type(str(path))
         return guess
+
+    @staticmethod
+    def _derived_key(*, transform: str, src_hash: str, params: dict[str, Any] | None) -> str:
+        payload = {
+            "transform": str(transform),
+            "src_hash": str(src_hash),
+            "params": params or {},
+        }
+        encoded = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
+    async def get_derived(
+        self,
+        *,
+        transform: str,
+        src_hash: str,
+        params: dict[str, Any] | None = None,
+    ) -> str | None:
+        try:
+            await self._ensure_schema()
+            return await asyncio.to_thread(self._get_derived_sync, str(transform), str(src_hash), params or None)
+        except Exception:
+            return None
+
+    def _get_derived_sync(self, transform: str, src_hash: str, params: dict[str, Any] | None) -> str | None:
+        import psycopg
+
+        key = self._derived_key(transform=transform, src_hash=src_hash, params=params)
+        with psycopg.connect(self.settings.database_url, connect_timeout=1) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT dst_hash FROM derived_blobs WHERE key=%s AND transform=%s AND src_hash=%s",
+                    (key, transform, src_hash),
+                )
+                row = cur.fetchone()
+                return str(row[0]) if row else None
+
+    async def set_derived(
+        self,
+        *,
+        transform: str,
+        src_hash: str,
+        dst_hash: str,
+        params: dict[str, Any] | None = None,
+    ) -> None:
+        try:
+            await self._ensure_schema()
+            await asyncio.to_thread(self._set_derived_sync, str(transform), str(src_hash), str(dst_hash), params or None)
+        except Exception:
+            return None
+
+    def _set_derived_sync(
+        self,
+        transform: str,
+        src_hash: str,
+        dst_hash: str,
+        params: dict[str, Any] | None,
+    ) -> None:
+        import psycopg
+        from psycopg.types.json import Jsonb
+
+        key = self._derived_key(transform=transform, src_hash=src_hash, params=params)
+        with psycopg.connect(self.settings.database_url, connect_timeout=1) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO derived_blobs (key, transform, src_hash, dst_hash, params_json, created_at, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, NOW(), NOW())
+                    ON CONFLICT (key) DO NOTHING;
+                    """,
+                    (key, transform, src_hash, dst_hash, Jsonb(params or {})),
+                )
+            conn.commit()
 
     async def ingest_file(
         self,
@@ -230,6 +323,17 @@ class BlobStore:
                         src.unlink()
                     except Exception:
                         pass
+        elif move and src.exists():
+            try:
+                same = False
+                try:
+                    same = src.samefile(dst)
+                except Exception:
+                    same = False
+                if not same:
+                    src.unlink()
+            except Exception:
+                pass
 
         with psycopg.connect(self.settings.database_url, connect_timeout=1) as conn:
             with conn.cursor() as cur:

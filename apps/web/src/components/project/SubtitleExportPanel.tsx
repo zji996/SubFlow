@@ -54,6 +54,7 @@ export function SubtitleExportPanel({ projectId, hasLLMCompleted }: SubtitleExpo
         format,
         content,
         primary_position: position,
+        translation_style: translationStyle,
     })
 
     const refreshExports = useCallback(async () => {

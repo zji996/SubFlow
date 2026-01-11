@@ -4,6 +4,12 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LOG_DIR="${ROOT_DIR}/logs"
 
+# Prefer Astral official uv (avoids snap-uv issues on some systems).
+if [[ -f "${HOME}/.local/bin/env" ]]; then
+  # shellcheck disable=SC1090
+  source "${HOME}/.local/bin/env"
+fi
+
 if [[ -t 1 ]]; then
   RED=$'\033[0;31m'
   GREEN=$'\033[0;32m'

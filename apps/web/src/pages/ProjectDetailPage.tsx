@@ -2,11 +2,9 @@ import { useCallback, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
     deleteProject,
-    getArtifactContent,
     getProject,
     runAll,
     runStage,
-    type ArtifactContentResponse,
     type Project,
     type StageName,
     type StageRun,
@@ -35,9 +33,6 @@ export default function ProjectDetailPage() {
     const navigate = useNavigate()
 
     const [expandedStage, setExpandedStage] = useState<StageName | null>(null)
-    const [artifactPreview, setArtifactPreview] = useState<ArtifactContentResponse | null>(null)
-    const [artifactLoading, setArtifactLoading] = useState(false)
-    const [artifactError, setArtifactError] = useState<string | null>(null)
     const [showEditor, setShowEditor] = useState(false)
 
     const fetcher = useCallback((signal: AbortSignal) => {
@@ -47,8 +42,9 @@ export default function ProjectDetailPage() {
 
     const { data: project, loading, error } = usePolling<Project>({
         fetcher,
-        interval: 2000,
+        interval: 5000, // 5 seconds - balanced between responsiveness and server load
         enabled: !!projectId,
+        shouldStop: (data) => data.status === 'completed' || data.status === 'failed',
     })
 
     const handleRunNext = async () => {
@@ -68,20 +64,6 @@ export default function ProjectDetailPage() {
         if (!window.confirm('确认删除该项目？此操作不可恢复。')) return
         await deleteProject(projectId)
         navigate('/projects')
-    }
-
-    const handlePreviewArtifact = async (stage: StageName, name: string) => {
-        if (!projectId) return
-        setArtifactLoading(true)
-        setArtifactError(null)
-        try {
-            const res = await getArtifactContent(projectId, stage, name)
-            setArtifactPreview(res)
-        } catch (err) {
-            setArtifactError(err instanceof Error ? err.message : 'Failed to load artifact')
-        } finally {
-            setArtifactLoading(false)
-        }
     }
 
     const latestStageRuns = useMemo(() => {
@@ -207,6 +189,13 @@ export default function ProjectDetailPage() {
                             </div>
                         </div>
                         <div className="flex items-center gap-2">
+                            <Link to={`/projects/${projectId}/preview`} className="btn-secondary">
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                                </svg>
+                                预览数据
+                            </Link>
                             <button onClick={() => setShowEditor(true)} className="btn-primary">
                                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
@@ -261,8 +250,6 @@ export default function ProjectDetailPage() {
                         const run = latestStageRuns.get(s.name)
                         const status = run?.status || 'pending'
                         const expanded = expandedStage === s.name
-                        const outputArtifacts = run?.output_artifacts || {}
-                        const artifactNames = Object.keys(outputArtifacts)
 
                         const stageBaseClass =
                             'border rounded-xl overflow-hidden transition-all border-[--color-border] bg-[rgba(15,23,42,0.4)]'
@@ -349,36 +336,6 @@ export default function ProjectDetailPage() {
                                                     </div>
                                                 </div>
                                             )}
-
-                                            <div className="md:col-span-2 p-3 rounded-lg bg-[--color-bg]/50 border border-[--color-border]">
-                                                <div className="flex items-center justify-between gap-3 mb-2">
-                                                    <div className="text-xs text-[--color-text-muted]">输出产物</div>
-                                                    <div className="text-xs text-[--color-text-dim]">{artifactNames.length} 个文件</div>
-                                                </div>
-                                                {artifactNames.length === 0 ? (
-                                                    <div className="text-xs text-[--color-text-dim]">暂无</div>
-                                                ) : (
-                                                    <div className="space-y-2">
-                                                        {artifactNames.map((name) => (
-                                                            <div key={name} className="flex items-center justify-between gap-3">
-                                                                <div className="min-w-0">
-                                                                    <div className="text-xs font-mono truncate">{name}</div>
-                                                                </div>
-                                                                <button
-                                                                    className="text-xs text-[--color-primary-light] hover:underline shrink-0"
-                                                                    onClick={(e) => {
-                                                                        e.stopPropagation()
-                                                                        handlePreviewArtifact(s.name, name)
-                                                                    }}
-                                                                    disabled={artifactLoading}
-                                                                >
-                                                                    {artifactLoading ? '加载中...' : '预览'}
-                                                                </button>
-                                                            </div>
-                                                        ))}
-                                                    </div>
-                                                )}
-                                            </div>
                                         </div>
                                     </div>
                                 )}
@@ -387,39 +344,6 @@ export default function ProjectDetailPage() {
                     })}
                 </div>
             </div>
-
-            {/* Artifact Preview Modal */}
-            {(artifactError || artifactPreview) && (
-                <div className="glass-card p-6 mb-8 animate-fade-in">
-                    <div className="flex items-center justify-between gap-3 mb-4">
-                        <div className="text-lg font-semibold">产物预览</div>
-                        <button
-                            className="btn-icon"
-                            onClick={() => {
-                                setArtifactPreview(null)
-                                setArtifactError(null)
-                            }}
-                        >
-                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                            </svg>
-                        </button>
-                    </div>
-                    {artifactError && <div className="text-sm text-[--color-error-light]">{artifactError}</div>}
-                    {artifactPreview && (
-                        <>
-                            <div className="text-sm text-[--color-text-muted] mb-3">
-                                {artifactPreview.stage} / {artifactPreview.name}
-                            </div>
-                            <pre className="code-preview">
-                                {artifactPreview.kind === 'json'
-                                    ? JSON.stringify(artifactPreview.data, null, 2).slice(0, 20000)
-                                    : artifactPreview.data.slice(0, 20000)}
-                            </pre>
-                        </>
-                    )}
-                </div>
-            )}
 
             {/* Subtitle Export Panel */}
             {projectId && (

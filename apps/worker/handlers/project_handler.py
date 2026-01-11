@@ -11,6 +11,7 @@ from subflow.config import Settings
 from subflow.models.project import ProjectStatus, StageName
 from subflow.pipeline import PipelineOrchestrator
 from subflow.repositories import (
+    ASRMergedChunkRepository,
     ASRSegmentRepository,
     DatabasePool,
     GlobalContextRepository,
@@ -34,6 +35,7 @@ async def process_project_task(task: dict[str, Any], redis: Redis, settings: Set
     stage_run_repo = StageRunRepository(pool)
     vad_repo = VADSegmentRepository(pool)
     asr_repo = ASRSegmentRepository(pool)
+    asr_merged_chunk_repo = ASRMergedChunkRepository(pool)
     global_context_repo = GlobalContextRepository(pool)
     semantic_chunk_repo = SemanticChunkRepository(pool)
 
@@ -49,6 +51,7 @@ async def process_project_task(task: dict[str, Any], redis: Redis, settings: Set
         stage_run_repo=stage_run_repo,
         vad_repo=vad_repo,
         asr_repo=asr_repo,
+        asr_merged_chunk_repo=asr_merged_chunk_repo,
         global_context_repo=global_context_repo,
         semantic_chunk_repo=semantic_chunk_repo,
     )

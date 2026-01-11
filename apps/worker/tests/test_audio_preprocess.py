@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 import httpx
@@ -7,6 +8,7 @@ import pytest
 
 from subflow.config import Settings
 from subflow.exceptions import ConfigurationError, StageExecutionError
+from subflow.services.blob_store import ProjectFileRef
 from subflow.stages.audio_preprocess import AudioPreprocessStage
 
 
@@ -20,6 +22,11 @@ class _DummyAudioProvider:
         out = Path(output_dir) / "vocals.wav"
         out.write_bytes(b"")
         return str(out)
+
+
+class _CacheHitProvider(_DummyAudioProvider):
+    async def separate_vocals(self, audio_path: str, output_dir: str) -> str:  # noqa: ARG002
+        raise AssertionError("separate_vocals should not run on cache hit")
 
 
 async def test_audio_preprocess_rejects_unsupported_media_url(tmp_path) -> None:
@@ -102,3 +109,97 @@ async def test_audio_preprocess_uses_existing_video_path(tmp_path) -> None:
     assert out["video_path"] == str(local_video)
     assert Path(out["audio_path"]).exists()
     assert Path(out["vocals_audio_path"]).exists()
+
+
+async def test_audio_preprocess_reuses_cached_vocals(tmp_path, monkeypatch) -> None:
+    settings = Settings(
+        data_dir=str(tmp_path / "data"),
+        log_dir=str(tmp_path / "logs"),
+        models_dir=str(tmp_path / "models"),
+    )
+
+    class _DummyBlobStore:
+        def __init__(self, settings: Settings) -> None:
+            self.base_dir = Path(settings.data_dir) / "blobs"
+            self._cached_vocals_hash = "6" * 64
+
+        def blob_path(self, hash_hex: str) -> Path:
+            h = (hash_hex or "").strip().lower()
+            return self.base_dir / h[:2] / h[2:4] / h
+
+        async def get_derived(self, *, transform: str, src_hash: str, params=None):  # noqa: ANN001,ARG002
+            if transform != "demucs_vocals":
+                return None
+            if not src_hash:
+                return None
+            return self._cached_vocals_hash
+
+        async def set_derived(self, *, transform: str, src_hash: str, dst_hash: str, params=None) -> None:  # noqa: ANN001,ARG002
+            raise AssertionError("set_derived should not be called on cache hit")
+
+        async def ingest_hashed_file(
+            self,
+            *,
+            project_id: str,  # noqa: ARG002
+            file_type: str,
+            local_path: str,
+            hash_hex: str,
+            size_bytes: int,  # noqa: ARG002
+            original_filename: str | None = None,
+            mime_type: str | None = None,  # noqa: ARG002
+            move: bool = False,
+        ) -> ProjectFileRef:
+            src = Path(local_path)
+            dst = self.blob_path(hash_hex)
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            if move and src.exists() and not dst.exists():
+                src.replace(dst)
+            return ProjectFileRef(
+                file_type=file_type,  # type: ignore[arg-type]
+                blob_hash=hash_hex,
+                path=str(dst if dst.exists() else src),
+                original_filename=original_filename,
+            )
+
+        async def ingest_file(
+            self,
+            *,
+            project_id: str,
+            file_type: str,
+            local_path: str,
+            original_filename: str | None = None,
+            mime_type: str | None = None,
+            move: bool = False,
+        ) -> ProjectFileRef:
+            p = Path(local_path)
+            h = hashlib.sha256(p.read_bytes()).hexdigest()
+            return await self.ingest_hashed_file(
+                project_id=project_id,
+                file_type=file_type,
+                local_path=local_path,
+                hash_hex=h,
+                size_bytes=p.stat().st_size,
+                original_filename=original_filename,
+                mime_type=mime_type,
+                move=move,
+            )
+
+    import subflow.stages.audio_preprocess as ap
+
+    monkeypatch.setattr(ap, "BlobStore", _DummyBlobStore)
+
+    stage = AudioPreprocessStage(settings)
+    stage.provider = _CacheHitProvider()  # type: ignore[assignment]
+
+    local_video = tmp_path / "video.mp4"
+    local_video.write_bytes(b"video")
+
+    cached_hash = "6" * 64
+    cached_path = Path(settings.data_dir) / "blobs" / cached_hash[:2] / cached_hash[2:4] / cached_hash
+    cached_path.parent.mkdir(parents=True, exist_ok=True)
+    cached_path.write_bytes(b"cached vocals")
+
+    out = await stage.execute({"project_id": "p1", "media_url": str(local_video)})
+
+    assert Path(out["audio_path"]).exists()
+    assert out["vocals_audio_path"] == str(cached_path)

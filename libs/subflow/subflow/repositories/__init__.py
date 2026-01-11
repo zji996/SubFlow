@@ -1,6 +1,7 @@
 """PostgreSQL repository layer (DB-first persistence)."""
 
 from subflow.repositories.asr_segment_repo import ASRSegmentRepository
+from subflow.repositories.asr_merged_chunk_repo import ASRMergedChunkRepository
 from subflow.repositories.base import BaseRepository, DatabasePool
 from subflow.repositories.global_context_repo import GlobalContextRepository
 from subflow.repositories.project_repo import ProjectRepository
@@ -10,6 +11,7 @@ from subflow.repositories.subtitle_export_repo import SubtitleExportRepository
 from subflow.repositories.vad_segment_repo import VADSegmentRepository
 
 __all__ = [
+    "ASRMergedChunkRepository",
     "ASRSegmentRepository",
     "BaseRepository",
     "DatabasePool",
@@ -20,4 +22,3 @@ __all__ = [
     "SubtitleExportRepository",
     "VADSegmentRepository",
 ]
-

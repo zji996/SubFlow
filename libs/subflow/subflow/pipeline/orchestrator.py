@@ -22,6 +22,7 @@ from subflow.models.segment import ASRCorrectedSegment
 from subflow.pipeline.context import PipelineContext, ProgressReporter
 from subflow.pipeline.stage_runners import RUNNERS
 from subflow.repositories import (
+    ASRMergedChunkRepository,
     ASRSegmentRepository,
     GlobalContextRepository,
     ProjectRepository,
@@ -109,6 +110,7 @@ class PipelineOrchestrator:
         stage_run_repo: StageRunRepository,
         vad_repo: VADSegmentRepository,
         asr_repo: ASRSegmentRepository,
+        asr_merged_chunk_repo: ASRMergedChunkRepository,
         global_context_repo: GlobalContextRepository,
         semantic_chunk_repo: SemanticChunkRepository,
         on_project_update: ProjectUpdateHook | None = None,
@@ -119,6 +121,7 @@ class PipelineOrchestrator:
         self.stage_run_repo = stage_run_repo
         self.vad_repo = vad_repo
         self.asr_repo = asr_repo
+        self.asr_merged_chunk_repo = asr_merged_chunk_repo
         self.global_context_repo = global_context_repo
         self.semantic_chunk_repo = semantic_chunk_repo
         self._on_project_update = on_project_update
@@ -169,15 +172,24 @@ class PipelineOrchestrator:
         ctx: PipelineContext = self._base_context(project)
 
         if project.current_stage >= _STAGE_INDEX[StageName.AUDIO_PREPROCESS]:
-            try:
-                stage1 = await self.store.load_json(project.id, StageName.AUDIO_PREPROCESS.value, "stage1.json")
-                if isinstance(stage1, dict):
-                    for key in ("video_path", "audio_path", "vocals_audio_path"):
-                        value = stage1.get(key)
-                        if value is not None:
-                            ctx[key] = str(value)
-            except FileNotFoundError:
-                pass
+            media_files = dict(getattr(project, "media_files", {}) or {})
+            if media_files:
+                for k, ctx_key in (("video", "video_path"), ("audio", "audio_path"), ("vocals", "vocals_audio_path")):
+                    entry = media_files.get(k)
+                    if isinstance(entry, dict):
+                        path = entry.get("path")
+                        if path:
+                            ctx[ctx_key] = str(path)
+            if not (ctx.get("video_path") and ctx.get("audio_path") and ctx.get("vocals_audio_path")):
+                try:
+                    stage1 = await self.store.load_json(project.id, StageName.AUDIO_PREPROCESS.value, "stage1.json")
+                    if isinstance(stage1, dict):
+                        for key in ("video_path", "audio_path", "vocals_audio_path"):
+                            value = stage1.get(key)
+                            if value is not None:
+                                ctx[key] = str(value)
+                except FileNotFoundError:
+                    pass
 
         if project.current_stage >= _STAGE_INDEX[StageName.VAD]:
             ctx["vad_segments"] = await self.vad_repo.get_by_project(project.id)
@@ -187,14 +199,18 @@ class PipelineOrchestrator:
             ctx["full_transcript"] = " ".join(
                 seg.text for seg in list(ctx.get("asr_segments") or []) if (seg.text or "").strip()
             )
-            try:
-                merged = await self.store.load_json(project.id, StageName.ASR.value, "asr_merged_chunks.json")
-                if isinstance(merged, list):
-                    from subflow.models.serializers import deserialize_asr_merged_chunks
+            merged_chunks = await self.asr_merged_chunk_repo.get_by_project(project.id)
+            if merged_chunks:
+                ctx["asr_merged_chunks"] = merged_chunks
+            else:
+                try:
+                    merged = await self.store.load_json(project.id, StageName.ASR.value, "asr_merged_chunks.json")
+                    if isinstance(merged, list):
+                        from subflow.models.serializers import deserialize_asr_merged_chunks
 
-                    ctx["asr_merged_chunks"] = deserialize_asr_merged_chunks(merged)
-            except FileNotFoundError:
-                pass
+                        ctx["asr_merged_chunks"] = deserialize_asr_merged_chunks(merged)
+                except FileNotFoundError:
+                    pass
 
         if project.current_stage >= _STAGE_INDEX[StageName.LLM_ASR_CORRECTION]:
             corrected_map = await self.asr_repo.get_corrected_map(project.id)
@@ -284,8 +300,10 @@ class PipelineOrchestrator:
                 ctx, artifacts = await runner.run(
                     settings=self.settings,
                     store=self.store,
+                    project_repo=self.project_repo,
                     vad_repo=self.vad_repo,
                     asr_repo=self.asr_repo,
+                    asr_merged_chunk_repo=self.asr_merged_chunk_repo,
                     global_context_repo=self.global_context_repo,
                     semantic_chunk_repo=self.semantic_chunk_repo,
                     project=project,

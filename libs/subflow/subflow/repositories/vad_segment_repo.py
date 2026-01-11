@@ -18,7 +18,7 @@ class VADSegmentRepository(BaseRepository):
                 int(i),
                 float(seg.start),
                 float(seg.end),
-                None,
+                int(seg.region_id) if seg.region_id is not None else None,
             )
             for i, seg in enumerate(list(segments or []))
         ]
@@ -39,7 +39,7 @@ class VADSegmentRepository(BaseRepository):
             async with conn.cursor(row_factory=dict_row) as cur:
                 await cur.execute(
                     """
-                    SELECT segment_index, start_time, end_time
+                    SELECT segment_index, start_time, end_time, region_id
                     FROM vad_segments
                     WHERE project_id=%s
                     ORDER BY segment_index ASC
@@ -47,11 +47,17 @@ class VADSegmentRepository(BaseRepository):
                     (project_id,),
                 )
                 rows = await cur.fetchall()
-        return [VADSegment(start=float(r["start_time"]), end=float(r["end_time"])) for r in rows]
+        return [
+            VADSegment(
+                start=float(r["start_time"]),
+                end=float(r["end_time"]),
+                region_id=int(r["region_id"]) if r.get("region_id") is not None else None,
+            )
+            for r in rows
+        ]
 
     async def delete_by_project(self, project_id: str) -> None:
         async with self.connection() as conn:
             async with conn.cursor() as cur:
                 await cur.execute("DELETE FROM vad_segments WHERE project_id=%s", (project_id,))
             await conn.commit()
-

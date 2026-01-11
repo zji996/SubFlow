@@ -21,6 +21,7 @@ class DatabasePool:
                 conninfo=settings.database_url,
                 min_size=2,
                 max_size=10,
+                open=False,
             )
             await cls._pool.open()
         return cls._pool
@@ -40,4 +41,3 @@ class BaseRepository:
     async def connection(self) -> AsyncIterator[psycopg.AsyncConnection]:
         async with self.pool.connection() as conn:
             yield conn
-

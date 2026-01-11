@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 
 from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
 from psycopg_pool import AsyncConnectionPool
 
 from subflow.models.project import Project, ProjectStatus
@@ -11,6 +13,26 @@ from subflow.repositories.base import BaseRepository
 
 def _utcnow() -> datetime:
     return datetime.now(tz=timezone.utc)
+
+
+def _as_dict(value: object) -> dict:
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, (bytes, bytearray)):
+        try:
+            value = value.decode("utf-8")
+        except Exception:
+            return {}
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return {}
+        try:
+            parsed = json.loads(raw)
+        except Exception:
+            return {}
+        return dict(parsed) if isinstance(parsed, dict) else {}
+    return {}
 
 
 class ProjectRepository(BaseRepository):
@@ -23,6 +45,7 @@ class ProjectRepository(BaseRepository):
             id=str(row["id"]),
             name=str(row["name"]),
             media_url=str(row["media_url"]),
+            media_files=_as_dict(row.get("media_files")),
             source_language=row.get("source_language") if row.get("source_language") is not None else None,
             target_language=str(row.get("target_language") or "zh"),
             auto_workflow=bool(row.get("auto_workflow", True)),
@@ -44,16 +67,17 @@ class ProjectRepository(BaseRepository):
                 await cur.execute(
                     """
                     INSERT INTO projects (
-                      id, name, media_url, source_language, target_language,
+                      id, name, media_url, media_files, source_language, target_language,
                       auto_workflow, status, current_stage, error_message,
                       created_at, updated_at
                     )
-                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                     """,
                     (
                         project.id,
                         project.name,
                         project.media_url,
+                        Jsonb(dict(project.media_files or {})),
                         project.source_language,
                         project.target_language,
                         bool(project.auto_workflow),
@@ -74,7 +98,7 @@ class ProjectRepository(BaseRepository):
             async with conn.cursor(row_factory=dict_row) as cur:
                 await cur.execute(
                     """
-                    SELECT id, name, media_url, source_language, target_language,
+                    SELECT id, name, media_url, media_files, source_language, target_language,
                            auto_workflow, status, current_stage, error_message,
                            created_at, updated_at
                     FROM projects
@@ -96,6 +120,7 @@ class ProjectRepository(BaseRepository):
                     UPDATE projects
                     SET name=%s,
                         media_url=%s,
+                        media_files=%s,
                         source_language=%s,
                         target_language=%s,
                         auto_workflow=%s,
@@ -107,6 +132,7 @@ class ProjectRepository(BaseRepository):
                     (
                         project.name,
                         project.media_url,
+                        Jsonb(dict(project.media_files or {})),
                         project.source_language,
                         project.target_language,
                         bool(project.auto_workflow),
@@ -132,7 +158,7 @@ class ProjectRepository(BaseRepository):
             async with conn.cursor(row_factory=dict_row) as cur:
                 await cur.execute(
                     """
-                    SELECT id, name, media_url, source_language, target_language,
+                    SELECT id, name, media_url, media_files, source_language, target_language,
                            auto_workflow, status, current_stage, error_message,
                            created_at, updated_at
                     FROM projects
@@ -143,6 +169,20 @@ class ProjectRepository(BaseRepository):
                 )
                 rows = await cur.fetchall()
         return [self._from_row(r) for r in rows]
+
+    async def update_media_files(self, project_id: str, media_files: dict[str, object]) -> None:
+        now = _utcnow()
+        async with self.connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    """
+                    UPDATE projects
+                    SET media_files=%s, updated_at=%s
+                    WHERE id=%s
+                    """,
+                    (Jsonb(dict(media_files or {})), now, str(project_id)),
+                )
+            await conn.commit()
 
     async def update_status(
         self,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 from pathlib import Path
@@ -14,6 +15,7 @@ from subflow.exceptions import ConfigurationError, StageExecutionError
 from subflow.pipeline.context import PipelineContext, ProgressReporter
 from subflow.providers import get_audio_provider
 from subflow.services import BlobStore
+from subflow.services.blob_store import sha256_file
 from subflow.stages.base import Stage
 
 logger = logging.getLogger(__name__)
@@ -104,36 +106,75 @@ class AudioPreprocessStage(Stage):
         await self.provider.extract_audio(str(video_path), str(audio_path))
         logger.info("extracted audio to %s", audio_path)
 
-        try:
-            vocals_path = await self.provider.separate_vocals(str(audio_path), str(demucs_out))
-        except Exception as exc:
-            logger.exception("demucs separation failed")
-            raise StageExecutionError(
-                self.name,
-                "Demucs separation failed. Demucs is required. "
-                "Ensure `demucs` is installed in the worker uv env and runnable, and set "
-                "`CUDA_VISIBLE_DEVICES=1` if GPU0 is occupied."
-            ) from exc
-
         context = cast(PipelineContext, dict(context))
         context["video_path"] = str(video_path)
 
-        audio_ref = await blob_store.ingest_file(
+        audio_hash, audio_size = await asyncio.to_thread(sha256_file, audio_path)
+        derived_params = {
+            "provider": str(self.settings.audio.provider),
+            "demucs_bin": str(self.settings.audio.demucs_bin),
+            "demucs_model": str(self.settings.audio.demucs_model),
+        }
+        cached_vocals_hash = await blob_store.get_derived(
+            transform="demucs_vocals",
+            src_hash=audio_hash,
+            params=derived_params,
+        )
+
+        vocals_ref = None
+        if cached_vocals_hash:
+            cached_path = blob_store.blob_path(cached_vocals_hash)
+            if cached_path.exists():
+                logger.info("reuse cached vocals (audio_hash=%s, vocals_hash=%s)", audio_hash, cached_vocals_hash)
+                vocals_ref = await blob_store.ingest_hashed_file(
+                    project_id=run_id,
+                    file_type="vocals",
+                    local_path=str(cached_path),
+                    hash_hex=str(cached_vocals_hash),
+                    size_bytes=int(cached_path.stat().st_size),
+                    original_filename="vocals.wav",
+                    mime_type="audio/wav",
+                    move=False,
+                )
+
+        if vocals_ref is None:
+            try:
+                vocals_path = await self.provider.separate_vocals(str(audio_path), str(demucs_out))
+            except Exception as exc:
+                logger.exception("demucs separation failed")
+                raise StageExecutionError(
+                    self.name,
+                    "Demucs separation failed. Demucs is required. "
+                    "Ensure `demucs` is installed in the worker uv env and runnable, and set "
+                    "`CUDA_VISIBLE_DEVICES=1` if GPU0 is occupied."
+                ) from exc
+
+        audio_ref = await blob_store.ingest_hashed_file(
             project_id=run_id,
             file_type="audio",
             local_path=str(audio_path),
+            hash_hex=audio_hash,
+            size_bytes=audio_size,
             original_filename="audio.wav",
             mime_type="audio/wav",
             move=True,
         )
-        vocals_ref = await blob_store.ingest_file(
-            project_id=run_id,
-            file_type="vocals",
-            local_path=str(vocals_path),
-            original_filename="vocals.wav",
-            mime_type="audio/wav",
-            move=True,
-        )
+
+        if vocals_ref is None:
+            vocals_ref = await blob_store.ingest_file(
+                project_id=run_id,
+                file_type="vocals",
+                local_path=str(vocals_path),
+                original_filename="vocals.wav",
+                mime_type="audio/wav",
+                move=True,
+            )
+            await blob_store.set_derived(
+                transform="demucs_vocals",
+                src_hash=audio_hash,
+                dst_hash=str(vocals_ref.blob_hash),
+                params=derived_params,
+            )
         context["audio_path"] = str(audio_ref.path)
         context["vocals_audio_path"] = str(vocals_ref.path)
         logger.info("audio_preprocess done (vocals_audio_path=%s)", vocals_ref.path)

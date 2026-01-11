@@ -148,6 +148,9 @@ class _NoopRepo:
     async def bulk_insert(self, project_id: str, chunks):  # noqa: ANN001, ARG002
         return []
 
+    async def bulk_upsert(self, project_id: str, chunks):  # noqa: ANN001, ARG002
+        return None
+
     async def get_by_project(self, project_id: str):  # noqa: ANN001, ARG002
         return []
 
@@ -163,8 +166,10 @@ class _Runner:
         *,
         settings: Settings,  # noqa: ARG002
         store,  # noqa: ANN001, ARG002
+        project_repo,  # noqa: ANN001, ARG002
         vad_repo,  # noqa: ANN001, ARG002
         asr_repo,  # noqa: ANN001, ARG002
+        asr_merged_chunk_repo,  # noqa: ANN001, ARG002
         global_context_repo,  # noqa: ANN001, ARG002
         semantic_chunk_repo,  # noqa: ANN001, ARG002
         project,  # noqa: ANN001, ARG002
@@ -222,8 +227,10 @@ async def test_orchestrator_runs_up_to_target_stage(tmp_path, monkeypatch) -> No
             *,
             settings: Settings,  # noqa: ARG002
             store,  # noqa: ANN001, ARG002
+            project_repo,  # noqa: ANN001, ARG002
             vad_repo: _InMemoryVADRepo,
             asr_repo,  # noqa: ANN001, ARG002
+            asr_merged_chunk_repo,  # noqa: ANN001, ARG002
             global_context_repo,  # noqa: ANN001, ARG002
             semantic_chunk_repo,  # noqa: ANN001, ARG002
             project: Project,
@@ -245,6 +252,7 @@ async def test_orchestrator_runs_up_to_target_stage(tmp_path, monkeypatch) -> No
         stage_run_repo=stage_run_repo,
         vad_repo=vad_repo,
         asr_repo=asr_repo,
+        asr_merged_chunk_repo=noop,
         global_context_repo=noop,
         semantic_chunk_repo=noop,
     )
@@ -290,6 +298,7 @@ async def test_orchestrator_skips_when_already_completed(tmp_path) -> None:
         stage_run_repo=stage_run_repo,
         vad_repo=vad_repo,
         asr_repo=asr_repo,
+        asr_merged_chunk_repo=noop,
         global_context_repo=noop,
         semantic_chunk_repo=noop,
     )
@@ -350,8 +359,10 @@ async def test_orchestrator_runs_llm_asr_correction_stage(tmp_path, monkeypatch)
             *,
             settings: Settings,  # noqa: ARG002
             store,  # noqa: ANN001, ARG002
+            project_repo,  # noqa: ANN001, ARG002
             vad_repo: _InMemoryVADRepo,
             asr_repo,  # noqa: ANN001, ARG002
+            asr_merged_chunk_repo,  # noqa: ANN001, ARG002
             global_context_repo,  # noqa: ANN001, ARG002
             semantic_chunk_repo,  # noqa: ANN001, ARG002
             project: Project,
@@ -371,8 +382,10 @@ async def test_orchestrator_runs_llm_asr_correction_stage(tmp_path, monkeypatch)
             *,
             settings: Settings,  # noqa: ARG002
             store: LocalArtifactStore,
+            project_repo,  # noqa: ANN001, ARG002
             vad_repo,  # noqa: ANN001, ARG002
             asr_repo: _InMemoryASRRepo,
+            asr_merged_chunk_repo,  # noqa: ANN001, ARG002
             global_context_repo,  # noqa: ANN001, ARG002
             semantic_chunk_repo,  # noqa: ANN001, ARG002
             project: Project,
@@ -418,8 +431,10 @@ async def test_orchestrator_runs_llm_asr_correction_stage(tmp_path, monkeypatch)
             *,
             settings: Settings,  # noqa: ARG002
             store,  # noqa: ANN001, ARG002
+            project_repo,  # noqa: ANN001, ARG002
             vad_repo,  # noqa: ANN001, ARG002
             asr_repo: _InMemoryASRRepo,
+            asr_merged_chunk_repo,  # noqa: ANN001, ARG002
             global_context_repo,  # noqa: ANN001, ARG002
             semantic_chunk_repo,  # noqa: ANN001, ARG002
             project: Project,
@@ -444,6 +459,7 @@ async def test_orchestrator_runs_llm_asr_correction_stage(tmp_path, monkeypatch)
         stage_run_repo=stage_run_repo,
         vad_repo=vad_repo,
         asr_repo=asr_repo,
+        asr_merged_chunk_repo=noop,
         global_context_repo=noop,
         semantic_chunk_repo=noop,
     )
