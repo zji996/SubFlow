@@ -4,7 +4,7 @@
 .env.*.local
 
 # === 临时目录 (通过环境变量配置路径) ===
-models/
+/models/
 data/
 logs/
 
