@@ -7,6 +7,8 @@ interface ProjectCardProps {
     project: Project
     onDelete?: () => void
     isDeleting?: boolean
+    isSelected?: boolean
+    onSelect?: (selected: boolean) => void
 }
 
 // Calculate progress percentage based on current stage
@@ -44,7 +46,7 @@ function formatRelativeTime(isoString?: string | null): string {
     return '刚刚'
 }
 
-export function ProjectCard({ project, onDelete, isDeleting }: ProjectCardProps) {
+export function ProjectCard({ project, onDelete, isDeleting, isSelected, onSelect }: ProjectCardProps) {
     const progress = getProgress(project)
     const isActive = project.status === 'processing'
 
@@ -55,9 +57,10 @@ export function ProjectCard({ project, onDelete, isDeleting }: ProjectCardProps)
     }
 
     return (
-        <div className="glass-card group relative overflow-hidden">
-            {/* Delete button - appears on hover */}
-            {onDelete && (
+        <div className={`glass-card group relative overflow-hidden ${isSelected ? 'outline outline-2 outline-[--color-primary]' : ''}`}>
+
+            {/* Delete button - appears on hover (only in normal mode) */}
+            {onDelete && !onSelect && (
                 <button
                     onClick={handleDeleteClick}
                     disabled={isDeleting}
@@ -77,57 +80,123 @@ export function ProjectCard({ project, onDelete, isDeleting }: ProjectCardProps)
                 </button>
             )}
 
-            <Link
-                to={`/projects/${project.id}`}
-                className="block p-6 hover:bg-[--color-bg-hover] transition-colors"
-            >
-                {/* Header */}
-                <div className="flex items-start justify-between gap-4 mb-4 pr-8">
-                    <div className="min-w-0 flex-1">
-                        <h3 className="text-lg font-semibold text-[--color-text] truncate group-hover:text-[--color-primary-light] transition-colors">
-                            {project.name || `项目 #${project.id.slice(0, 8)}`}
-                        </h3>
-                        <p className="text-sm text-[--color-text-muted] mt-1 truncate flex items-center gap-2">
-                            <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                            </svg>
-                            {getMediaName(project.media_url)}
-                        </p>
-                    </div>
-                    <StatusBadge status={project.status} />
+            {/* Selection checkbox indicator (top-left, shown in select mode when selected) */}
+            {onSelect && isSelected && (
+                <div className="absolute top-3 left-3 z-10 p-1.5 rounded-lg bg-[--color-primary] text-white">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                    </svg>
                 </div>
+            )}
 
-                {/* Progress Bar */}
-                <div className="mb-4">
-                    <div className="progress-bar">
-                        <div
-                            className={`progress-bar-fill ${isActive ? 'animate-pulse' : ''}`}
-                            style={{ width: `${progress}%` }}
-                        ></div>
+            {/* Card content - clickable for selection OR navigation */}
+            {onSelect ? (
+                /* Select mode: clicking card toggles selection */
+                <button
+                    onClick={() => onSelect(!isSelected)}
+                    className="block w-full text-left p-6 hover:bg-[--color-bg-hover] transition-colors cursor-pointer"
+                >
+                    {/* Header */}
+                    <div className="flex items-start justify-between gap-4 mb-4 pr-8">
+                        <div className="min-w-0 flex-1">
+                            <h3 className="text-lg font-semibold text-[--color-text] truncate group-hover:text-[--color-primary-light] transition-colors">
+                                {project.name || `项目 #${project.id.slice(0, 8)}`}
+                            </h3>
+                            <p className="text-sm text-[--color-text-muted] mt-1 truncate flex items-center gap-2">
+                                <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                                </svg>
+                                {getMediaName(project.media_url)}
+                            </p>
+                        </div>
+                        <StatusBadge status={project.status} />
                     </div>
-                </div>
 
-                {/* Footer */}
-                <div className="flex items-center justify-between text-xs text-[--color-text-muted]">
-                    <div className="flex items-center gap-3">
-                        <span className="flex items-center gap-1">
-                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-                            </svg>
-                            Stage {Math.min(project.current_stage, 5)}/5
-                        </span>
-                        <span className="flex items-center gap-1">
-                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129" />
-                            </svg>
-                            {project.source_language || 'auto'} → {project.target_language}
+                    {/* Progress Bar */}
+                    <div className="mb-4">
+                        <div className="progress-bar">
+                            <div
+                                className={`progress-bar-fill ${isActive ? 'animate-pulse' : ''}`}
+                                style={{ width: `${progress}%` }}
+                            ></div>
+                        </div>
+                    </div>
+
+                    {/* Footer */}
+                    <div className="flex items-center justify-between text-xs text-[--color-text-muted]">
+                        <div className="flex items-center gap-3">
+                            <span className="flex items-center gap-1">
+                                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                                </svg>
+                                Stage {Math.min(project.current_stage, 5)}/5
+                            </span>
+                            <span className="flex items-center gap-1">
+                                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129" />
+                                </svg>
+                                {project.source_language || 'auto'} → {project.target_language}
+                            </span>
+                        </div>
+                        <span className="text-[--color-text-dim]">
+                            {formatRelativeTime(project.updated_at)}
                         </span>
                     </div>
-                    <span className="text-[--color-text-dim]">
-                        {formatRelativeTime(project.updated_at)}
-                    </span>
-                </div>
-            </Link>
+                </button>
+            ) : (
+                /* Normal mode: clicking card navigates to detail */
+                <Link
+                    to={`/projects/${project.id}`}
+                    className="block p-6 hover:bg-[--color-bg-hover] transition-colors"
+                >
+                    {/* Header */}
+                    <div className="flex items-start justify-between gap-4 mb-4 pr-8">
+                        <div className="min-w-0 flex-1">
+                            <h3 className="text-lg font-semibold text-[--color-text] truncate group-hover:text-[--color-primary-light] transition-colors">
+                                {project.name || `项目 #${project.id.slice(0, 8)}`}
+                            </h3>
+                            <p className="text-sm text-[--color-text-muted] mt-1 truncate flex items-center gap-2">
+                                <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                                </svg>
+                                {getMediaName(project.media_url)}
+                            </p>
+                        </div>
+                        <StatusBadge status={project.status} />
+                    </div>
+
+                    {/* Progress Bar */}
+                    <div className="mb-4">
+                        <div className="progress-bar">
+                            <div
+                                className={`progress-bar-fill ${isActive ? 'animate-pulse' : ''}`}
+                                style={{ width: `${progress}%` }}
+                            ></div>
+                        </div>
+                    </div>
+
+                    {/* Footer */}
+                    <div className="flex items-center justify-between text-xs text-[--color-text-muted]">
+                        <div className="flex items-center gap-3">
+                            <span className="flex items-center gap-1">
+                                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                                </svg>
+                                Stage {Math.min(project.current_stage, 5)}/5
+                            </span>
+                            <span className="flex items-center gap-1">
+                                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129" />
+                                </svg>
+                                {project.source_language || 'auto'} → {project.target_language}
+                            </span>
+                        </div>
+                        <span className="text-[--color-text-dim]">
+                            {formatRelativeTime(project.updated_at)}
+                        </span>
+                    </div>
+                </Link>
+            )}
         </div>
     )
 }

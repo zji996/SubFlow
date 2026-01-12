@@ -330,7 +330,7 @@ ASR 段落：
 
 | TranslationStyle | 描述 |
 |------------------|------|
-| `per_chunk` (默认) | 根据程序生成的 `translation_chunks` 分配翻译；每个段落取其对应 `segment_id` 的翻译片段 |
+| `per_chunk`（标点均分，默认） | 根据程序生成的 `translation_chunks` 分配翻译；每个段落取其对应 `segment_id` 的翻译片段 |
 | `full` | 每行显示完整意译 (`translation`)，语义块内所有段落共享 |
 
 **per_chunk 分配逻辑**：

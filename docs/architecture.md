@@ -217,7 +217,7 @@ Stage 5 的详细提示词、输入/输出 JSON、以及给 LLM 的实际输入�
 **目标**：将翻译结果导出为标准字幕格式（默认双行字幕）。
 
 - 第一行（主字幕）：根据 `translation_style` 配置
-  - `per_chunk`（默认）：按 `translation_chunks` 分配（每个段落取其对应 `segment_id` 的翻译片段）
+  - `per_chunk`（标点均分，默认）：按 `translation_chunks` 分配（每个段落取其对应 `segment_id` 的翻译片段）
   - `full`：`SemanticChunk.translation`（完整意译，所有段落共享）
 - 第二行（子字幕）：每个 `ASRSegment` 对应的 `ASRCorrectedSegment.text`（若无纠错则回退到 `ASRSegment.text`）
 

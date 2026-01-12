@@ -60,8 +60,6 @@ export function SubtitleEditor({ projectId, onClose }: SubtitleEditorProps) {
                 return entry.primary_per_chunk
             case 'full':
                 return entry.primary_full
-            case 'per_segment':
-                return entry.primary_per_segment
             default:
                 return entry.primary_per_chunk
         }
@@ -194,9 +192,8 @@ export function SubtitleEditor({ projectId, onClose }: SubtitleEditorProps) {
                             onChange={(e) => setTranslationStyle(e.target.value as TranslationStyle)}
                             className="input py-1 px-3 text-sm"
                         >
-                            <option value="per_chunk">按翻译分段</option>
+                            <option value="per_chunk">标点均分</option>
                             <option value="full">完整意译</option>
-                            <option value="per_segment">均分翻译</option>
                         </select>
                     </div>
                     <div className="flex items-center gap-2">

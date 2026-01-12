@@ -19,7 +19,7 @@ from subflow.models.project import (
     StageRunStatus,
 )
 from subflow.models.segment import ASRCorrectedSegment
-from subflow.pipeline.context import PipelineContext, ProgressReporter
+from subflow.pipeline.context import PipelineContext, ProgressReporter, StageMetrics
 from subflow.pipeline.stage_runners import RUNNERS
 from subflow.repositories import (
     ASRMergedChunkRepository,
@@ -93,6 +93,52 @@ class _StageRunProgressReporter(ProgressReporter):
 
             self._stage_run.progress = pct
             self._stage_run.progress_message = msg
+            self._last_progress = pct
+            self._last_update_at = now
+            await self._notify_update(self._project)
+
+    async def report_metrics(self, metrics: StageMetrics) -> None:
+        payload = dict(metrics or {})
+        progress = payload.pop("progress", None)
+        message = payload.pop("progress_message", None)
+
+        pct: int | None = int(progress) if isinstance(progress, int) else None
+        if pct is not None:
+            if pct < 0:
+                pct = 0
+            if pct > 100:
+                pct = 100
+
+        msg: str | None = None
+        if message is not None:
+            msg = str(message or "").strip() or "running"
+
+        now = time.monotonic()
+        async with self._lock:
+            if pct is None:
+                pct = self._last_progress
+            elif pct < self._last_progress:
+                pct = self._last_progress
+
+            should_emit = False
+            if pct >= 100:
+                should_emit = True
+            elif pct >= self._last_progress + self._min_percent_step:
+                should_emit = True
+            elif self._min_interval_s > 0 and now - self._last_update_at >= self._min_interval_s:
+                should_emit = True
+
+            if not should_emit:
+                return
+
+            self._stage_run.progress = pct
+            if msg is not None:
+                self._stage_run.progress_message = msg
+
+            current = dict(getattr(self._stage_run, "metrics", {}) or {})
+            current.update(payload)
+            self._stage_run.metrics = current
+
             self._last_progress = pct
             self._last_update_at = now
             await self._notify_update(self._project)
@@ -282,6 +328,7 @@ class PipelineOrchestrator:
                     stage_name.value,
                     progress=int(run.progress or 0),
                     message=str(run.progress_message or "running"),
+                    metrics=dict(getattr(run, "metrics", {}) or {}),
                 )
                 await self._notify_update(_project)
 
@@ -327,6 +374,7 @@ class PipelineOrchestrator:
                         "progress": 100,
                         "progress_message": "completed",
                         "output_artifacts": dict(artifacts),
+                        "metrics": dict(getattr(run, "metrics", {}) or {}),
                     },
                 )
                 await self.project_repo.update_status(
@@ -358,7 +406,11 @@ class PipelineOrchestrator:
                     stage_name.value,
                     run.error_code or ErrorCode.UNKNOWN.value,
                     run.error_message or "failed",
-                    metadata={"duration_ms": run.duration_ms, "progress_message": "failed"},
+                    metadata={
+                        "duration_ms": run.duration_ms,
+                        "progress_message": "failed",
+                        "metrics": dict(getattr(run, "metrics", {}) or {}),
+                    },
                 )
                 await self.project_repo.update_status(
                     project.id,

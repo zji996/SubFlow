@@ -82,6 +82,16 @@ export default function ProjectDetailPage() {
         return dt.toLocaleString()
     }
 
+    const formatRate = (value?: number | null, unit = 'items/s') => {
+        if (typeof value !== 'number' || !Number.isFinite(value)) return null
+        return `${value.toFixed(2)} ${unit}`
+    }
+
+    const formatInt = (value?: number | null) => {
+        if (typeof value !== 'number' || !Number.isFinite(value)) return null
+        return `${Math.trunc(value)}`
+    }
+
     // Check if LLM stage is completed
     const hasLLMCompleted = useMemo(() => {
         if (!project) return false
@@ -303,6 +313,30 @@ export default function ProjectDetailPage() {
                                         <div className="mt-2 text-xs text-[--color-text-muted]">
                                             {run?.progress_message || '处理中...'} {typeof run?.progress === 'number' ? `(${run.progress}%)` : ''}
                                         </div>
+                                        {(run?.metrics && (
+                                            <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-[--color-text-muted]">
+                                                {formatRate(run.metrics.items_per_second, 'items/s') && (
+                                                    <span className="px-2 py-1 rounded-md bg-[--color-bg]/40 border border-[--color-border]">
+                                                        速率: {formatRate(run.metrics.items_per_second, 'items/s')}
+                                                    </span>
+                                                )}
+                                                {formatRate(run.metrics.llm_tokens_per_second, 'tokens/s') && (
+                                                    <span className="px-2 py-1 rounded-md bg-[--color-bg]/40 border border-[--color-border]">
+                                                        LLM: {formatRate(run.metrics.llm_tokens_per_second, 'tokens/s')}
+                                                    </span>
+                                                )}
+                                                {formatInt(run.metrics.active_tasks) && formatInt(run.metrics.max_concurrent) && (
+                                                    <span className="px-2 py-1 rounded-md bg-[--color-bg]/40 border border-[--color-border]">
+                                                        并发: {formatInt(run.metrics.active_tasks)}/{formatInt(run.metrics.max_concurrent)}
+                                                    </span>
+                                                )}
+                                                {formatInt(run.metrics.llm_prompt_tokens) && formatInt(run.metrics.llm_completion_tokens) && (
+                                                    <span className="px-2 py-1 rounded-md bg-[--color-bg]/40 border border-[--color-border]">
+                                                        tokens: {formatInt(run.metrics.llm_prompt_tokens)}/{formatInt(run.metrics.llm_completion_tokens)}
+                                                    </span>
+                                                )}
+                                            </div>
+                                        )) || null}
                                     </div>
                                 )}
 
@@ -327,6 +361,43 @@ export default function ProjectDetailPage() {
                                                 <div className="text-xs text-[--color-text-muted]">状态</div>
                                                 <div className="mt-1 text-xs font-mono">{status}</div>
                                             </div>
+                                            {run?.metrics && (
+                                                <div className="md:col-span-2 p-3 rounded-lg bg-[--color-bg]/50 border border-[--color-border]">
+                                                    <div className="text-xs text-[--color-text-muted] mb-2">实时指标</div>
+                                                    <div className="flex flex-wrap gap-2 text-xs font-mono">
+                                                        {typeof run.metrics.items_processed === 'number' && typeof run.metrics.items_total === 'number' && (
+                                                            <span className="px-2 py-1 rounded-md bg-[--color-bg]/40 border border-[--color-border]">
+                                                                items: {formatInt(run.metrics.items_processed)}/{formatInt(run.metrics.items_total)}
+                                                            </span>
+                                                        )}
+                                                        {formatRate(run.metrics.items_per_second, 'items/s') && (
+                                                            <span className="px-2 py-1 rounded-md bg-[--color-bg]/40 border border-[--color-border]">
+                                                                items/s: {formatRate(run.metrics.items_per_second, 'items/s')}
+                                                            </span>
+                                                        )}
+                                                        {typeof run.metrics.llm_prompt_tokens === 'number' && typeof run.metrics.llm_completion_tokens === 'number' && (
+                                                            <span className="px-2 py-1 rounded-md bg-[--color-bg]/40 border border-[--color-border]">
+                                                                prompt/completion: {formatInt(run.metrics.llm_prompt_tokens)}/{formatInt(run.metrics.llm_completion_tokens)}
+                                                            </span>
+                                                        )}
+                                                        {formatRate(run.metrics.llm_tokens_per_second, 'tokens/s') && (
+                                                            <span className="px-2 py-1 rounded-md bg-[--color-bg]/40 border border-[--color-border]">
+                                                                tokens/s: {formatRate(run.metrics.llm_tokens_per_second, 'tokens/s')}
+                                                            </span>
+                                                        )}
+                                                        {formatInt(run.metrics.active_tasks) && formatInt(run.metrics.max_concurrent) && (
+                                                            <span className="px-2 py-1 rounded-md bg-[--color-bg]/40 border border-[--color-border]">
+                                                                active: {formatInt(run.metrics.active_tasks)}/{formatInt(run.metrics.max_concurrent)}
+                                                            </span>
+                                                        )}
+                                                        {formatInt(run.metrics.llm_calls_count) && (
+                                                            <span className="px-2 py-1 rounded-md bg-[--color-bg]/40 border border-[--color-border]">
+                                                                llm_calls: {formatInt(run.metrics.llm_calls_count)}
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            )}
 
                                             {status === 'failed' && (
                                                 <div className="md:col-span-2 p-3 rounded-lg bg-[--color-error]/10 border border-[--color-error]/30">

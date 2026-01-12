@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from pathlib import Path
 from typing import cast
 
 from subflow.config import Settings
 from subflow.models.segment import ASRMergedChunk, ASRSegment, VADSegment
-from subflow.pipeline.context import PipelineContext, ProgressReporter
+from subflow.pipeline.concurrency import get_concurrency_tracker
+from subflow.pipeline.context import MetricsProgressReporter, PipelineContext, ProgressReporter
 from subflow.providers import get_asr_provider
 from subflow.stages.base import Stage
 from subflow.utils.audio import cleanup_segment_files, cut_audio_segments_batch
@@ -58,6 +60,7 @@ class ASRStage(Stage):
         vad_regions: list[VADSegment] = list(context.get("vad_regions") or [])
         source_language = context.get("source_language") or None
         max_concurrent = max(1, int(self.settings.concurrency_asr))
+        tracker = get_concurrency_tracker(self.settings)
 
         if not vad_segments:
             logger.info("asr skipped (no vad_segments)")
@@ -80,6 +83,7 @@ class ASRStage(Stage):
         try:
             base_dir.mkdir(parents=True, exist_ok=True)
             logger.info("asr start (segments=%d)", len(vad_segments))
+            started_at = time.monotonic()
             # 1. Cut audio into segments (concurrent ffmpeg)
             time_ranges = [(seg.start, seg.end) for seg in vad_segments]
             segment_paths = await cut_audio_segments_batch(
@@ -98,7 +102,22 @@ class ASRStage(Stage):
                 if not progress_reporter or total <= 0:
                     return
                 pct = int(done / total * 100)
-                await progress_reporter.report(pct, message)
+                if isinstance(progress_reporter, MetricsProgressReporter):
+                    elapsed = max(0.001, time.monotonic() - started_at)
+                    state = await tracker.snapshot("asr")
+                    await progress_reporter.report_metrics(
+                        {
+                            "progress": pct,
+                            "progress_message": message,
+                            "items_processed": int(done),
+                            "items_total": int(total),
+                            "items_per_second": float(done) / elapsed,
+                            "active_tasks": int(state.active),
+                            "max_concurrent": int(state.max),
+                        }
+                    )
+                else:
+                    await progress_reporter.report(pct, message)
 
             await _report_progress(
                 done=0,
@@ -111,12 +130,13 @@ class ASRStage(Stage):
 
             async def _transcribe_one(path: str) -> str:
                 async with semaphore:
-                    try:
-                        segs = await self.provider.transcribe(path, language=source_language)
-                        return segs[0].text if segs else ""
-                    except Exception as exc:
-                        logger.warning("asr error for %s: %s", path, exc)
-                        return ""
+                    async with tracker.acquire("asr"):
+                        try:
+                            segs = await self.provider.transcribe(path, language=source_language)
+                            return segs[0].text if segs else ""
+                        except Exception as exc:
+                            logger.warning("asr error for %s: %s", path, exc)
+                            return ""
 
             texts: list[str] = [""] * len(segment_paths)
 

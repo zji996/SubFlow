@@ -5,7 +5,9 @@ def test_projects_crud_flow(client, monkeypatch) -> None:
     async def _noop_release(self, project_id: str) -> int:  # noqa: ARG001
         return 0
 
-    monkeypatch.setattr("subflow.services.blob_store.BlobStore.release_project_files", _noop_release)
+    monkeypatch.setattr(
+        "subflow.services.blob_store.BlobStore.release_project_files", _noop_release
+    )
 
     res = client.post(
         "/projects",

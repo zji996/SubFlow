@@ -3,6 +3,7 @@
    ============================================ */
 
 @keyframes pulse-glow {
+
   0%,
   100% {
     box-shadow: 0 0 5px rgba(99, 102, 241, 0.4);
@@ -47,6 +48,30 @@
   }
 }
 
+@keyframes scale-in {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes slide-in-right {
+  from {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
 @keyframes shimmer {
   0% {
     background-position: -200% 0;
@@ -73,6 +98,14 @@
   animation: slide-up 0.4s ease-out forwards;
 }
 
+.animate-scale-in {
+  animation: scale-in 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animate-slide-in-right {
+  animation: slide-in-right 0.3s ease-out forwards;
+}
+
 /* Skeleton loading shimmer */
 .skeleton {
   background: linear-gradient(90deg, rgba(148, 163, 184, 0.1) 25%, rgba(148, 163, 184, 0.2) 50%, rgba(148, 163, 184, 0.1) 75%);
@@ -80,4 +113,3 @@
   animation: shimmer 1.5s infinite;
   border-radius: 0.5rem;
 }
-

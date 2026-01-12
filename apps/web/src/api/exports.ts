@@ -20,7 +20,7 @@ export interface CreateExportRequest {
     format: ExportFormat
     content: ContentMode
     primary_position: PrimaryPosition
-    translation_style?: 'per_chunk' | 'full' | 'per_segment'
+    translation_style?: 'per_chunk' | 'full'
 }
 
 export async function listExports(projectId: string, options?: ApiRequestOptions): Promise<SubtitleExport[]> {
@@ -34,4 +34,3 @@ export async function createExport(
 ): Promise<SubtitleExport> {
     return apiRequest<SubtitleExport>(`/projects/${projectId}/exports`, { ...options, method: 'POST', json: data })
 }
-

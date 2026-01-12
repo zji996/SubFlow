@@ -158,7 +158,9 @@ class FakeASRSegmentRepository:
     def __init__(self, pool: InMemoryPool) -> None:
         self.pool = pool
 
-    async def get_by_project(self, project_id: str, *, use_corrected: bool = False) -> list[ASRSegment]:
+    async def get_by_project(
+        self, project_id: str, *, use_corrected: bool = False
+    ) -> list[ASRSegment]:
         pid = str(project_id)
         segs = list(self.pool.asr_segments.get(pid, []))
         if not use_corrected:
@@ -169,7 +171,11 @@ class FakeASRSegmentRepository:
             text = seg.text
             if int(seg.id) in corrected:
                 text = corrected[int(seg.id)]
-            out.append(ASRSegment(id=seg.id, start=seg.start, end=seg.end, text=text, language=seg.language))
+            out.append(
+                ASRSegment(
+                    id=seg.id, start=seg.start, end=seg.end, text=text, language=seg.language
+                )
+            )
         return out
 
     async def get_corrected_map(self, project_id: str) -> dict[int, str]:
@@ -208,7 +214,9 @@ def db_pool() -> InMemoryPool:
 def patch_repos(monkeypatch, db_pool: InMemoryPool) -> None:
     monkeypatch.setattr("services.project_service.ProjectRepository", FakeProjectRepository)
     monkeypatch.setattr("services.project_service.StageRunRepository", FakeStageRunRepository)
-    monkeypatch.setattr("services.project_service.SubtitleExportRepository", FakeSubtitleExportRepository)
+    monkeypatch.setattr(
+        "services.project_service.SubtitleExportRepository", FakeSubtitleExportRepository
+    )
 
     monkeypatch.setattr("routes.projects.ASRSegmentRepository", FakeASRSegmentRepository)
     monkeypatch.setattr("routes.projects.SemanticChunkRepository", FakeSemanticChunkRepository)

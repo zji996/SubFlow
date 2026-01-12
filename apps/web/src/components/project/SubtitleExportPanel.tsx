@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 
+import { ApiError } from '../../api/client'
 import {
-    getDownloadSubtitlesUrl,
     type ContentMode,
     type ExportFormat,
     type PrimaryPosition,
@@ -31,40 +31,63 @@ const positionOptions: { value: PrimaryPosition; label: string; description: str
     { value: 'bottom', label: '翻译在下', description: '原文显示在第一行' },
 ]
 
-type TranslationStyle = 'per_chunk' | 'full' | 'per_segment'
+type TranslationStyle = 'per_chunk' | 'full'
 
 const translationStyleOptions: { value: TranslationStyle; label: string; description: string }[] = [
-    { value: 'per_chunk', label: '按翻译分段', description: '每个翻译片段对应一个或多个原文段落' },
-    { value: 'full', label: '完整意译', description: '每行显示语义块的完整翻译' },
-    { value: 'per_segment', label: '均分翻译', description: '翻译按原文段落数量均分' },
+    { value: 'per_chunk', label: '标点均分', description: '按标点切分翻译，根据时长分配到每行（推荐）' },
+    { value: 'full', label: '完整意译', description: '每行显示完整翻译，语义块内共享' },
 ]
+
+function formatExportsError(err: unknown): string {
+    if (err instanceof ApiError) {
+        const detailText =
+            err.detail == null
+                ? null
+                : typeof err.detail === 'string'
+                    ? err.detail
+                    : JSON.stringify(err.detail, null, 2)
+
+        const base = `${err.message} (HTTP ${err.status})`
+        if (!detailText || detailText === err.message) return base
+        return `${base}\n${detailText}`
+    }
+    if (err instanceof Error) return err.message
+    return String(err)
+}
 
 export function SubtitleExportPanel({ projectId, hasLLMCompleted }: SubtitleExportPanelProps) {
     const [format, setFormat] = useState<ExportFormat>('srt')
     const [content, setContent] = useState<ContentMode>('both')
     const [position, setPosition] = useState<PrimaryPosition>('top')
-    const [isDownloading, setIsDownloading] = useState(false)
+
     const [exports, setExports] = useState<SubtitleExport[]>([])
     const [exportsLoading, setExportsLoading] = useState(false)
     const [exportsError, setExportsError] = useState<string | null>(null)
     const [isSaving, setIsSaving] = useState(false)
     const [translationStyle, setTranslationStyle] = useState<TranslationStyle>('per_chunk')
 
-    const downloadHref = getDownloadSubtitlesUrl(projectId, {
-        format,
-        content,
-        primary_position: position,
-        translation_style: translationStyle,
-    })
+
 
     const refreshExports = useCallback(async () => {
         setExportsLoading(true)
         setExportsError(null)
         try {
+            if (import.meta.env.DEV) {
+                // eslint-disable-next-line no-console
+                console.log('[SubtitleExportPanel] refreshExports', { projectId })
+            }
             const items = await listExports(projectId)
+            if (import.meta.env.DEV) {
+                // eslint-disable-next-line no-console
+                console.log('[SubtitleExportPanel] refreshExports OK', { projectId, count: items.length })
+            }
             setExports(items)
         } catch (err) {
-            setExportsError(err instanceof Error ? err.message : 'Failed to load exports')
+            if (import.meta.env.DEV) {
+                // eslint-disable-next-line no-console
+                console.log('[SubtitleExportPanel] refreshExports ERROR', { projectId, err })
+            }
+            setExportsError(formatExportsError(err))
         } finally {
             setExportsLoading(false)
         }
@@ -75,27 +98,32 @@ export function SubtitleExportPanel({ projectId, hasLLMCompleted }: SubtitleExpo
         void refreshExports()
     }, [hasLLMCompleted, refreshExports])
 
-    const handleDownload = async () => {
-        setIsDownloading(true)
-        // Using native link download - just need to trigger it
-        const link = document.createElement('a')
-        link.href = downloadHref
-        document.body.appendChild(link)
-        link.click()
-        document.body.removeChild(link)
-        setTimeout(() => setIsDownloading(false), 1000)
-    }
+
 
     const handleSaveExport = async () => {
         setIsSaving(true)
         setExportsError(null)
         try {
+            if (import.meta.env.DEV) {
+                // eslint-disable-next-line no-console
+                console.log('[SubtitleExportPanel] handleSaveExport', {
+                    projectId,
+                    format,
+                    content,
+                    primary_position: position,
+                    translation_style: translationStyle,
+                })
+            }
             const exp = await createExport(projectId, {
                 format,
                 content,
                 primary_position: position,
                 translation_style: translationStyle,
             })
+            if (import.meta.env.DEV) {
+                // eslint-disable-next-line no-console
+                console.log('[SubtitleExportPanel] handleSaveExport OK', { projectId, exportId: exp.id })
+            }
             setExports((prev) => [exp, ...prev.filter((x) => x.id !== exp.id)])
 
             const link = document.createElement('a')
@@ -104,7 +132,11 @@ export function SubtitleExportPanel({ projectId, hasLLMCompleted }: SubtitleExpo
             link.click()
             document.body.removeChild(link)
         } catch (err) {
-            setExportsError(err instanceof Error ? err.message : 'Failed to create export')
+            if (import.meta.env.DEV) {
+                // eslint-disable-next-line no-console
+                console.log('[SubtitleExportPanel] handleSaveExport ERROR', { projectId, err })
+            }
+            setExportsError(formatExportsError(err))
         } finally {
             setIsSaving(false)
         }
@@ -154,11 +186,18 @@ export function SubtitleExportPanel({ projectId, hasLLMCompleted }: SubtitleExpo
                         <button
                             key={opt.value}
                             onClick={() => setFormat(opt.value)}
-                            className={`p-3 rounded-xl border text-left transition-all ${format === opt.value
-                                ? 'border-[--color-primary] bg-[--color-primary]/10'
+                            className={`relative p-3 rounded-xl border text-left transition-all ${format === opt.value
+                                ? 'border-[--color-primary] border-2 bg-[--color-primary]/10 shadow-[0_0_0_1px_var(--color-primary)]'
                                 : 'border-[--color-border] hover:border-[--color-border-light] hover:bg-[--color-bg-hover]'
                                 }`}
                         >
+                            {format === opt.value && (
+                                <div className="absolute top-2 right-2 w-5 h-5 rounded-full bg-[--color-primary] flex items-center justify-center">
+                                    <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                                    </svg>
+                                </div>
+                            )}
                             <div className="flex items-center gap-2 mb-1">
                                 <span>{opt.icon}</span>
                                 <span className="font-medium">{opt.label}</span>
@@ -177,11 +216,18 @@ export function SubtitleExportPanel({ projectId, hasLLMCompleted }: SubtitleExpo
                         <button
                             key={opt.value}
                             onClick={() => setContent(opt.value)}
-                            className={`p-3 rounded-xl border text-left transition-all ${content === opt.value
-                                ? 'border-[--color-primary] bg-[--color-primary]/10'
+                            className={`relative p-3 rounded-xl border text-left transition-all ${content === opt.value
+                                ? 'border-[--color-primary] border-2 bg-[--color-primary]/10 shadow-[0_0_0_1px_var(--color-primary)]'
                                 : 'border-[--color-border] hover:border-[--color-border-light] hover:bg-[--color-bg-hover]'
                                 }`}
                         >
+                            {content === opt.value && (
+                                <div className="absolute top-2 right-2 w-5 h-5 rounded-full bg-[--color-primary] flex items-center justify-center">
+                                    <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                                    </svg>
+                                </div>
+                            )}
                             <div className="font-medium mb-1">{opt.label}</div>
                             <p className="text-xs text-[--color-text-muted]">{opt.description}</p>
                         </button>
@@ -198,11 +244,18 @@ export function SubtitleExportPanel({ projectId, hasLLMCompleted }: SubtitleExpo
                             <button
                                 key={opt.value}
                                 onClick={() => setPosition(opt.value)}
-                                className={`p-3 rounded-xl border text-left transition-all ${position === opt.value
-                                    ? 'border-[--color-primary] bg-[--color-primary]/10'
+                                className={`relative p-3 rounded-xl border text-left transition-all ${position === opt.value
+                                    ? 'border-[--color-primary] border-2 bg-[--color-primary]/10 shadow-[0_0_0_1px_var(--color-primary)]'
                                     : 'border-[--color-border] hover:border-[--color-border-light] hover:bg-[--color-bg-hover]'
                                     }`}
                             >
+                                {position === opt.value && (
+                                    <div className="absolute top-2 right-2 w-5 h-5 rounded-full bg-[--color-primary] flex items-center justify-center">
+                                        <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                                        </svg>
+                                    </div>
+                                )}
                                 <div className="font-medium mb-1">{opt.label}</div>
                                 <p className="text-xs text-[--color-text-muted]">{opt.description}</p>
                             </button>
@@ -220,11 +273,18 @@ export function SubtitleExportPanel({ projectId, hasLLMCompleted }: SubtitleExpo
                             <button
                                 key={opt.value}
                                 onClick={() => setTranslationStyle(opt.value)}
-                                className={`p-3 rounded-xl border text-left transition-all ${translationStyle === opt.value
-                                    ? 'border-[--color-primary] bg-[--color-primary]/10'
+                                className={`relative p-3 rounded-xl border text-left transition-all ${translationStyle === opt.value
+                                    ? 'border-[--color-primary] border-2 bg-[--color-primary]/10 shadow-[0_0_0_1px_var(--color-primary)]'
                                     : 'border-[--color-border] hover:border-[--color-border-light] hover:bg-[--color-bg-hover]'
                                     }`}
                             >
+                                {translationStyle === opt.value && (
+                                    <div className="absolute top-2 right-2 w-5 h-5 rounded-full bg-[--color-primary] flex items-center justify-center">
+                                        <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                                        </svg>
+                                    </div>
+                                )}
                                 <div className="font-medium mb-1">{opt.label}</div>
                                 <p className="text-xs text-[--color-text-muted]">{opt.description}</p>
                             </button>
@@ -256,62 +316,48 @@ export function SubtitleExportPanel({ projectId, hasLLMCompleted }: SubtitleExpo
                 </div>
             </div>
 
-            {/* Download Button */}
+            {/* Export Button */}
             <button
-                onClick={handleDownload}
-                disabled={isDownloading}
+                onClick={handleSaveExport}
+                disabled={isSaving}
                 className="btn-primary w-full py-4 text-base"
             >
-                {isDownloading ? (
+                {isSaving ? (
                     <>
                         <svg className="w-5 h-5 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                             <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                         </svg>
-                        <span>准备下载中...</span>
+                        <span>导出中...</span>
                     </>
                 ) : (
                     <>
                         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
                         </svg>
-                        <span>下载字幕文件</span>
+                        <span>导出字幕</span>
                     </>
                 )}
             </button>
 
-            {/* Note */}
-            <p className="mt-4 text-xs text-[--color-text-dim] text-center">
-                字幕将根据您的设置实时生成；也可保存导出版本用于后续下载
-            </p>
-
-            {/* Save + History */}
+            {/* History Section */}
             <div className="mt-6 border-t border-[--color-border] pt-6">
                 <div className="flex items-center justify-between gap-3 mb-4">
                     <div>
                         <div className="text-sm font-medium">历史导出</div>
-                        <div className="text-xs text-[--color-text-muted]">保存的导出版本将写入存储（本地/桶）</div>
+                        <div className="text-xs text-[--color-text-muted]">点击上方导出后会自动保存版本</div>
                     </div>
-                    <div className="flex items-center gap-2">
-                        <button
-                            onClick={refreshExports}
-                            disabled={exportsLoading}
-                            className="btn-secondary"
-                        >
-                            刷新
-                        </button>
-                        <button
-                            onClick={handleSaveExport}
-                            disabled={isSaving}
-                            className="btn-primary"
-                        >
-                            {isSaving ? '保存中…' : '保存并下载'}
-                        </button>
-                    </div>
+                    <button
+                        onClick={refreshExports}
+                        disabled={exportsLoading}
+                        className="btn-secondary"
+                    >
+                        刷新
+                    </button>
                 </div>
 
                 {exportsError && (
-                    <div className="mb-4 p-3 rounded-lg bg-[--color-error]/10 border border-[--color-error]/30 text-xs text-[--color-error-light]">
+                    <div className="mb-4 p-3 rounded-lg bg-[--color-error]/10 border border-[--color-error]/30 text-xs text-[--color-error-light] whitespace-pre-wrap break-words">
                         {exportsError}
                     </div>
                 )}

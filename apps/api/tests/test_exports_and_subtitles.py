@@ -123,13 +123,20 @@ def test_exports_create_from_artifacts_and_subtitle_endpoints(client, redis, set
 
     _set_project_stage(client.app.state.db_pool, pid, 5)
 
-    res = client.get(f"/projects/{pid}/subtitles/download?format=srt&content=both&primary_position=top")
+    res = client.get(
+        f"/projects/{pid}/subtitles/download?format=srt&content=both&primary_position=top"
+    )
     assert res.status_code == 200
     assert "甲" in res.text
 
     res = client.post(
         f"/projects/{pid}/exports",
-        json={"format": "srt", "content": "both", "primary_position": "top", "translation_style": "per_chunk"},
+        json={
+            "format": "srt",
+            "content": "both",
+            "primary_position": "top",
+            "translation_style": "per_chunk",
+        },
     )
     assert res.status_code == 200
     export_id = res.json()["id"]
@@ -145,11 +152,12 @@ def test_exports_create_from_artifacts_and_subtitle_endpoints(client, redis, set
     assert payload["computed_entries"][0]["segment_id"] == 0
     assert payload["computed_entries"][0]["primary_per_chunk"] == "甲"
     assert payload["computed_entries"][0]["primary_full"] == "甲乙"
-    assert payload["computed_entries"][0]["primary_per_segment"] == "甲"
     assert payload["computed_entries"][0]["secondary"] == "A"
 
 
-def test_exports_create_from_edited_entries_propagates_per_chunk_group(client, redis, settings) -> None:
+def test_exports_create_from_edited_entries_propagates_per_chunk_group(
+    client, redis, settings
+) -> None:
     res = client.post(
         "/projects",
         json={"name": "demo", "media_url": "https://example.com/v.mp4", "target_language": "zh"},
@@ -189,7 +197,7 @@ def test_exports_create_from_edited_entries_propagates_per_chunk_group(client, r
     assert "AA" in res.text
 
 
-def test_exports_per_segment_uses_split_full_translation(client, redis, settings) -> None:
+def test_exports_per_segment_falls_back_to_per_chunk(client, redis, settings) -> None:
     res = client.post(
         "/projects",
         json={"name": "demo", "media_url": "https://example.com/v.mp4", "target_language": "zh"},
@@ -220,6 +228,4 @@ def test_exports_per_segment_uses_split_full_translation(client, redis, settings
 
     res = client.get(f"/projects/{pid}/exports/{export_id}/download")
     assert res.status_code == 200
-    assert "甲乙" in res.text
-    assert "丙丁" in res.text
-    assert "共用" not in res.text
+    assert "共用" in res.text

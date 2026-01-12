@@ -60,6 +60,7 @@ class _InMemoryStageRunRepo:
         *,
         progress: int,  # noqa: ARG002
         message: str,  # noqa: ARG002
+        metrics=None,  # noqa: ANN001, ARG002
     ) -> None:
         return None
 

@@ -7,7 +7,8 @@ import re
 from dataclasses import dataclass
 from typing import Any, cast
 
-from subflow.providers.llm import LLMProvider, Message
+from subflow.providers.llm import LLMProvider, LLMUsage, Message
+from subflow.utils.tokenizer import count_tokens
 
 
 _THINK_BLOCK_RE = re.compile(r"^\s*<think>[\s\S]*?</think>\s*", re.IGNORECASE)
@@ -112,7 +113,18 @@ class LLMJSONHelper:
         """
         self.llm = llm
         self.max_retries = max_retries
-    
+
+    @staticmethod
+    def _estimate_usage(messages: list[Message], response_text: str) -> LLMUsage:
+        prompt_text = "\n".join(f"{m.role}: {m.content}" for m in messages)
+        prompt_tokens = count_tokens(prompt_text)
+        completion_tokens = count_tokens(response_text or "")
+        return LLMUsage(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+        )
+
     async def complete_json_with_retry(
         self,
         messages: list[Message],
@@ -136,16 +148,16 @@ class LLMJSONHelper:
         
         for attempt in range(self.max_retries):
             try:
-                response = await self.llm.complete(current_messages, temperature=temperature)
-                last_response = response
-                return parse_llm_json(response)
+                completion = await self.llm.complete_with_usage(current_messages, temperature=temperature)
+                last_response = completion.text
+                return parse_llm_json(completion.text)
             except json.JSONDecodeError as e:
                 last_error = e
                 
                 if attempt < self.max_retries - 1:
                     # Add error feedback for retry
                     current_messages = current_messages + [
-                        Message(role="assistant", content=response),
+                        Message(role="assistant", content=last_response),
                         Message(
                             role="user",
                             content=(
@@ -168,3 +180,39 @@ class LLMJSONHelper:
     ) -> JSONData:
         """Alias for complete_json_with_retry."""
         return await self.complete_json_with_retry(messages, temperature)
+
+    async def complete_json_with_usage(
+        self,
+        messages: list[Message],
+        temperature: float = 0.3,
+    ) -> tuple[JSONData, LLMUsage]:
+        current_messages = list(messages)
+        last_error: Exception | None = None
+        last_response: str = ""
+        last_usage: LLMUsage | None = None
+
+        for attempt in range(self.max_retries):
+            try:
+                completion = await self.llm.complete_with_usage(current_messages, temperature=temperature)
+                last_response = completion.text
+                last_usage = completion.usage or self._estimate_usage(current_messages, completion.text)
+                return parse_llm_json(completion.text), last_usage
+            except json.JSONDecodeError as exc:
+                last_error = exc
+                if attempt < self.max_retries - 1:
+                    current_messages = current_messages + [
+                        Message(role="assistant", content=last_response),
+                        Message(
+                            role="user",
+                            content=(
+                                f"JSON 解析失败：{exc.msg}（位置 {exc.pos}）。\n"
+                                "请重新输出有效的 JSON。你可以使用 ```json ... ``` 格式。"
+                            ),
+                        ),
+                    ]
+
+        raise ValueError(
+            f"JSON 解析失败，已重试 {self.max_retries} 次。\n"
+            f"最后错误：{last_error}\n"
+            f"最后响应：{last_response[:500]}..."
+        )

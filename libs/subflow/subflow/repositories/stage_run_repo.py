@@ -26,6 +26,7 @@ class StageRunRepository(BaseRepository):
     @staticmethod
     def _from_row(row: dict[str, object]) -> StageRun:
         metadata = _as_dict(row.get("metadata"))
+        metrics = _as_dict(metadata.get("metrics"))
         started_at = row.get("started_at")
         completed_at = row.get("completed_at")
         return StageRun(
@@ -36,6 +37,7 @@ class StageRunRepository(BaseRepository):
             duration_ms=int(metadata["duration_ms"]) if isinstance(metadata.get("duration_ms"), int) else None,
             progress=int(metadata["progress"]) if isinstance(metadata.get("progress"), int) else None,
             progress_message=str(metadata.get("progress_message") or "") or None,
+            metrics=metrics,
             error_code=str(metadata.get("error_code") or "") or None,
             error_message=str(row.get("error_message") or "") or None,
             input_artifacts=_as_dict(metadata.get("input_artifacts")),
@@ -172,6 +174,7 @@ class StageRunRepository(BaseRepository):
         *,
         progress: int,
         message: str,
+        metrics: dict[str, Any] | None = None,
     ) -> None:
         async with self.connection() as conn:
             async with conn.cursor(row_factory=dict_row) as cur:
@@ -183,6 +186,10 @@ class StageRunRepository(BaseRepository):
                 current = _as_dict(row.get("metadata") if row else None)
                 current["progress"] = max(0, min(100, int(progress)))
                 current["progress_message"] = str(message or "").strip() or "running"
+                if metrics:
+                    current_metrics = _as_dict(current.get("metrics"))
+                    current_metrics.update(dict(metrics))
+                    current["metrics"] = current_metrics
                 await cur.execute(
                     """
                     UPDATE stage_runs
@@ -192,4 +199,3 @@ class StageRunRepository(BaseRepository):
                     (Jsonb(current), project_id, str(stage)),
                 )
             await conn.commit()
-

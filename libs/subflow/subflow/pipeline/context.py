@@ -6,13 +6,35 @@ defines the stable, known keys to improve type safety and readability.
 
 from __future__ import annotations
 
-from typing import Any, Protocol, TypedDict
+from typing import Any, Protocol, TypedDict, runtime_checkable
 
 from subflow.models.segment import ASRCorrectedSegment, ASRMergedChunk, ASRSegment, SemanticChunk, VADSegment
 
 
 class ProgressReporter(Protocol):
     async def report(self, progress: int, message: str) -> None: ...
+
+
+class StageMetrics(TypedDict, total=False):
+    progress: int
+    progress_message: str
+
+    items_processed: int
+    items_total: int
+    items_per_second: float
+
+    llm_prompt_tokens: int
+    llm_completion_tokens: int
+    llm_tokens_per_second: float
+    llm_calls_count: int
+
+    active_tasks: int
+    max_concurrent: int
+
+
+@runtime_checkable
+class MetricsProgressReporter(ProgressReporter, Protocol):
+    async def report_metrics(self, metrics: StageMetrics) -> None: ...
 
 
 class PipelineContext(TypedDict, total=False):

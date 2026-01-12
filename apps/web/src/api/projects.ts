@@ -14,6 +14,17 @@ export interface StageRun {
     duration_ms?: number | null
     progress?: number | null
     progress_message?: string | null
+    metrics?: {
+        items_processed?: number
+        items_total?: number
+        items_per_second?: number
+        llm_prompt_tokens?: number
+        llm_completion_tokens?: number
+        llm_tokens_per_second?: number
+        llm_calls_count?: number
+        active_tasks?: number
+        max_concurrent?: number
+    } | null
     error_code?: string | null
     error_message?: string | null
     error?: string | null

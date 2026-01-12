@@ -5,11 +5,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import json
+import time
 from typing import Any, cast
 
 from subflow.exceptions import StageExecutionError
 from subflow.models.segment import ASRSegment, SemanticChunk, TranslationChunk, VADSegment
-from subflow.pipeline.context import PipelineContext, ProgressReporter
+from subflow.pipeline.concurrency import ServiceType, get_concurrency_tracker
+from subflow.pipeline.context import MetricsProgressReporter, PipelineContext, ProgressReporter
 from subflow.providers.llm import Message
 from subflow.stages.base_llm import BaseLLMStage
 from subflow.utils.tokenizer import truncate_to_tokens, count_tokens
@@ -69,6 +71,9 @@ class GlobalUnderstandingPass(BaseLLMStage):
     ) -> PipelineContext:
         context = cast(PipelineContext, dict(context))
         transcript = str(context.get("full_transcript", "")).strip()
+        started_at = time.monotonic()
+        service: ServiceType = "llm_power" if str(self.profile or "").strip().lower() == "power" else "llm_fast"
+        tracker = get_concurrency_tracker(self.settings)
 
         # Fallback if no API key
         if not self.api_key:
@@ -98,17 +103,58 @@ class GlobalUnderstandingPass(BaseLLMStage):
 
         system_prompt = self._get_system_prompt()
 
-        result = await self.json_helper.complete_json(
-            [
-                Message(role="system", content=system_prompt),
-                Message(role="user", content=transcript),
-            ]
-        )
+        if progress_reporter is not None:
+            if isinstance(progress_reporter, MetricsProgressReporter):
+                await progress_reporter.report_metrics({"progress": 0, "progress_message": "全局理解中"})
+            else:
+                await progress_reporter.report(0, "全局理解中")
+
+        helper = self.json_helper
+        complete_with_usage = getattr(helper, "complete_json_with_usage", None)
+        if callable(complete_with_usage):
+            async with tracker.acquire(service):
+                result, usage = await complete_with_usage(
+                    [
+                        Message(role="system", content=system_prompt),
+                        Message(role="user", content=transcript),
+                    ]
+                )
+        else:
+            async with tracker.acquire(service):
+                result = await helper.complete_json(
+                    [
+                        Message(role="system", content=system_prompt),
+                        Message(role="user", content=transcript),
+                    ]
+                )
+            usage = None
         if not isinstance(result, dict):
             raise StageExecutionError(
                 self.name, "Global understanding output must be a JSON object"
             )
         context["global_context"] = result
+        if progress_reporter is not None:
+            elapsed = max(0.001, time.monotonic() - started_at)
+            state = await tracker.snapshot(service)
+            prompt = getattr(usage, "prompt_tokens", None)
+            completion = getattr(usage, "completion_tokens", None)
+            llm_prompt = int(prompt) if isinstance(prompt, int) else 0
+            llm_completion = int(completion) if isinstance(completion, int) else 0
+            if isinstance(progress_reporter, MetricsProgressReporter):
+                await progress_reporter.report_metrics(
+                    {
+                        "progress": 100,
+                        "progress_message": "全局理解完成",
+                        "llm_prompt_tokens": llm_prompt,
+                        "llm_completion_tokens": llm_completion,
+                        "llm_calls_count": 1 if usage is not None else 0,
+                        "llm_tokens_per_second": float(llm_prompt + llm_completion) / elapsed,
+                        "active_tasks": int(state.active),
+                        "max_concurrent": int(state.max),
+                    }
+                )
+            else:
+                await progress_reporter.report(100, "全局理解完成")
         logger.info("llm_global_understanding done")
         return context
 
@@ -366,6 +412,13 @@ class SemanticChunkingPass(BaseLLMStage):
         target_language = str(context.get("target_language", "zh"))
         parallel_enabled = bool(getattr(self.settings, "parallel", None) and self.settings.parallel.enabled)
         vad_regions: list[VADSegment] = list(context.get("vad_regions") or [])
+        started_at = time.monotonic()
+        llm_prompt_tokens = 0
+        llm_completion_tokens = 0
+        llm_calls = 0
+        tokens_lock = asyncio.Lock()
+        service: ServiceType = "llm_power" if str(self.profile or "").strip().lower() == "power" else "llm_fast"
+        tracker = get_concurrency_tracker(self.settings)
 
         # Fallback if no API key
         if not self.api_key:
@@ -393,8 +446,27 @@ class SemanticChunkingPass(BaseLLMStage):
         llm_semaphore = asyncio.Semaphore(llm_limit)
 
         async def _complete_json(messages: list[Message]) -> Any:
+            nonlocal llm_prompt_tokens, llm_completion_tokens, llm_calls
             async with llm_semaphore:
-                return await self.json_helper.complete_json(messages)
+                async with tracker.acquire(service):
+                    helper = self.json_helper
+                    complete_with_usage = getattr(helper, "complete_json_with_usage", None)
+                    if callable(complete_with_usage):
+                        result, usage = await complete_with_usage(messages)
+                    else:
+                        result = await helper.complete_json(messages)
+                        usage = None
+
+            if usage is not None:
+                prompt = getattr(usage, "prompt_tokens", None)
+                completion = getattr(usage, "completion_tokens", None)
+                async with tokens_lock:
+                    if isinstance(prompt, int):
+                        llm_prompt_tokens += int(prompt)
+                    if isinstance(completion, int):
+                        llm_completion_tokens += int(completion)
+                    llm_calls += 1
+            return result
 
         async def _run_partition(
             partition_segments: list[ASRSegment],
@@ -556,7 +628,21 @@ class SemanticChunkingPass(BaseLLMStage):
 
             total_segments = len(asr_segments)
             if progress_reporter and total_segments > 0:
-                await progress_reporter.report(0, f"翻译中 0/{total_segments} 段")
+                if isinstance(progress_reporter, MetricsProgressReporter):
+                    state = await tracker.snapshot(service)
+                    await progress_reporter.report_metrics(
+                        {
+                            "progress": 0,
+                            "progress_message": f"翻译中 0/{total_segments} 段",
+                            "items_processed": 0,
+                            "items_total": int(total_segments),
+                            "items_per_second": 0.0,
+                            "active_tasks": int(state.active),
+                            "max_concurrent": int(state.max),
+                        }
+                    )
+                else:
+                    await progress_reporter.report(0, f"翻译中 0/{total_segments} 段")
 
             done_segments = 0
             done_lock = asyncio.Lock()
@@ -568,7 +654,33 @@ class SemanticChunkingPass(BaseLLMStage):
                     done_segments += len(part_segs)
                     if progress_reporter and total_segments > 0:
                         pct = int(min(done_segments, total_segments) / total_segments * 100)
-                        await progress_reporter.report(pct, f"翻译中 {min(done_segments, total_segments)}/{total_segments} 段")
+                        processed = int(min(done_segments, total_segments))
+                        msg = f"翻译中 {processed}/{total_segments} 段"
+                        if isinstance(progress_reporter, MetricsProgressReporter):
+                            elapsed = max(0.001, time.monotonic() - started_at)
+                            state = await tracker.snapshot(service)
+                            async with tokens_lock:
+                                prompt = int(llm_prompt_tokens)
+                                completion = int(llm_completion_tokens)
+                                calls = int(llm_calls)
+                            tokens_total = prompt + completion
+                            await progress_reporter.report_metrics(
+                                {
+                                    "progress": pct,
+                                    "progress_message": msg,
+                                    "items_processed": processed,
+                                    "items_total": int(total_segments),
+                                    "items_per_second": float(processed) / elapsed,
+                                    "llm_prompt_tokens": prompt,
+                                    "llm_completion_tokens": completion,
+                                    "llm_calls_count": calls,
+                                    "llm_tokens_per_second": float(tokens_total) / elapsed,
+                                    "active_tasks": int(state.active),
+                                    "max_concurrent": int(state.max),
+                                }
+                            )
+                        else:
+                            await progress_reporter.report(pct, msg)
                 return chunks
 
             partition_results = await asyncio.gather(*[_wrap(segs) for segs in partition_segments_list])
@@ -718,7 +830,32 @@ class SemanticChunkingPass(BaseLLMStage):
             if progress_reporter and total_segments > 0:
                 processed = min(cursor, total_segments)
                 pct = int(processed / total_segments * 100)
-                await progress_reporter.report(pct, f"翻译中 {processed}/{total_segments} 段")
+                msg = f"翻译中 {processed}/{total_segments} 段"
+                if isinstance(progress_reporter, MetricsProgressReporter):
+                    elapsed = max(0.001, time.monotonic() - started_at)
+                    state = await tracker.snapshot(service)
+                    async with tokens_lock:
+                        prompt = int(llm_prompt_tokens)
+                        completion = int(llm_completion_tokens)
+                        calls = int(llm_calls)
+                    tokens_total = prompt + completion
+                    await progress_reporter.report_metrics(
+                        {
+                            "progress": pct,
+                            "progress_message": msg,
+                            "items_processed": int(processed),
+                            "items_total": int(total_segments),
+                            "items_per_second": float(processed) / elapsed,
+                            "llm_prompt_tokens": prompt,
+                            "llm_completion_tokens": completion,
+                            "llm_calls_count": calls,
+                            "llm_tokens_per_second": float(tokens_total) / elapsed,
+                            "active_tasks": int(state.active),
+                            "max_concurrent": int(state.max),
+                        }
+                    )
+                else:
+                    await progress_reporter.report(pct, msg)
 
         context["asr_segments"] = asr_segments
         context["asr_segments_index"] = {seg.id: seg for seg in asr_segments}

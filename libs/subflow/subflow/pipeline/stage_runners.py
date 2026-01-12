@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from abc import ABC, abstractmethod
 from typing import cast
 
@@ -15,7 +16,7 @@ from subflow.models.segment import (
     SemanticChunk,
     VADSegment,
 )
-from subflow.pipeline.context import PipelineContext, ProgressReporter
+from subflow.pipeline.context import MetricsProgressReporter, PipelineContext, ProgressReporter, StageMetrics
 from subflow.repositories import (
     ASRMergedChunkRepository,
     ASRSegmentRepository,
@@ -35,6 +36,79 @@ from subflow.stages import (
 from subflow.storage.artifact_store import ArtifactStore
 
 logger = logging.getLogger(__name__)
+
+
+class _LLMStageProgressReporter(ProgressReporter):
+    def __init__(self, inner: ProgressReporter) -> None:
+        self._inner = inner
+        self._started_at = time.monotonic()
+        self._range_start = 0
+        self._range_end = 100
+        self._llm_prompt_offset = 0
+        self._llm_completion_offset = 0
+        self._llm_calls_offset = 0
+        self._llm_prompt_total = 0
+        self._llm_completion_total = 0
+        self._llm_calls_total = 0
+
+    def set_phase_range(self, start_pct: int, end_pct: int) -> None:
+        start = max(0, min(100, int(start_pct)))
+        end = max(0, min(100, int(end_pct)))
+        if end < start:
+            start, end = end, start
+        self._range_start = start
+        self._range_end = end
+
+    def advance_llm_offsets(self) -> None:
+        self._llm_prompt_offset = int(self._llm_prompt_total)
+        self._llm_completion_offset = int(self._llm_completion_total)
+        self._llm_calls_offset = int(self._llm_calls_total)
+
+    def _map_progress(self, pct: int) -> int:
+        p = max(0, min(100, int(pct)))
+        span = self._range_end - self._range_start
+        return int(self._range_start + (p / 100.0) * span)
+
+    async def report(self, progress: int, message: str) -> None:
+        await self._inner.report(self._map_progress(progress), message)
+
+    async def report_metrics(self, metrics: StageMetrics) -> None:
+        payload = dict(metrics or {})
+        raw_progress = payload.get("progress")
+        if isinstance(raw_progress, int):
+            payload["progress"] = self._map_progress(raw_progress)
+
+        saw_tokens = False
+        raw_prompt = payload.get("llm_prompt_tokens")
+        if isinstance(raw_prompt, int):
+            self._llm_prompt_total = int(self._llm_prompt_offset + raw_prompt)
+            payload["llm_prompt_tokens"] = int(self._llm_prompt_total)
+            saw_tokens = True
+
+        raw_completion = payload.get("llm_completion_tokens")
+        if isinstance(raw_completion, int):
+            self._llm_completion_total = int(self._llm_completion_offset + raw_completion)
+            payload["llm_completion_tokens"] = int(self._llm_completion_total)
+            saw_tokens = True
+
+        if saw_tokens:
+            elapsed = max(0.001, time.monotonic() - self._started_at)
+            total_tokens = int(self._llm_prompt_total) + int(self._llm_completion_total)
+            payload["llm_tokens_per_second"] = float(total_tokens) / elapsed
+
+        raw_calls = payload.get("llm_calls_count")
+        if isinstance(raw_calls, int):
+            self._llm_calls_total = int(self._llm_calls_offset + raw_calls)
+            payload["llm_calls_count"] = int(self._llm_calls_total)
+
+        if isinstance(self._inner, MetricsProgressReporter):
+            await self._inner.report_metrics(payload)
+            return
+
+        progress = payload.get("progress")
+        message = payload.get("progress_message") or payload.get("message")
+        if isinstance(progress, int):
+            await self._inner.report(progress, str(message or "running"))
 
 
 async def _maybe_close(obj: object) -> None:
@@ -300,15 +374,26 @@ class LLMRunner(StageRunner):
                     if filtered:
                         ctx["asr_corrected_segments"] = filtered
 
+        llm_reporter: ProgressReporter | None
+        if progress_reporter is not None:
+            llm_reporter = _LLMStageProgressReporter(progress_reporter)
+            cast(_LLMStageProgressReporter, llm_reporter).set_phase_range(0, 20)
+        else:
+            llm_reporter = None
+
         stage1 = GlobalUnderstandingPass(settings)
         try:
-            ctx = await stage1.execute(ctx, progress_reporter)
+            ctx = await stage1.execute(ctx, llm_reporter)
         finally:
             await _maybe_close(stage1)
 
+        if isinstance(llm_reporter, _LLMStageProgressReporter):
+            llm_reporter.advance_llm_offsets()
+            llm_reporter.set_phase_range(20, 100)
+
         stage2 = SemanticChunkingPass(settings)
         try:
-            ctx = await stage2.execute(ctx, progress_reporter)
+            ctx = await stage2.execute(ctx, llm_reporter)
         finally:
             await _maybe_close(stage2)
 

@@ -12,7 +12,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 
 from subflow.error_codes import ErrorCode
 from subflow.exceptions import ProviderError
-from subflow.providers.llm.base import LLMProvider, Message
+from subflow.providers.llm.base import LLMCompletionResult, LLMProvider, LLMUsage, Message
 
 logger = logging.getLogger(__name__)
 
@@ -42,17 +42,33 @@ class OpenAICompatProvider(LLMProvider):
             self._client = httpx.AsyncClient(timeout=120.0)
         return self._client
 
+    def _parse_usage(self, result: object) -> LLMUsage | None:
+        if not isinstance(result, dict):
+            return None
+        usage = result.get("usage")
+        if not isinstance(usage, dict):
+            return None
+        prompt = usage.get("prompt_tokens")
+        completion = usage.get("completion_tokens")
+        total = usage.get("total_tokens")
+        if not any(isinstance(x, int) for x in (prompt, completion, total)):
+            return None
+        return LLMUsage(
+            prompt_tokens=int(prompt) if isinstance(prompt, int) else None,
+            completion_tokens=int(completion) if isinstance(completion, int) else None,
+            total_tokens=int(total) if isinstance(total, int) else None,
+        )
+
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(min=1, max=10),
     )
-    async def complete(
+    async def _chat_completions(
         self,
         messages: list[Message],
         temperature: float = 0.7,
         max_tokens: int | None = None,
-    ) -> str:
-        """Generate a completion using OpenAI-compatible API."""
+    ) -> tuple[str, LLMUsage | None, int]:
         payload = {
             "model": self.model,
             "messages": [{"role": m.role, "content": m.content} for m in messages],
@@ -87,21 +103,45 @@ class OpenAICompatProvider(LLMProvider):
             ) from exc
 
         latency_ms = int((time.perf_counter() - started) * 1000)
-        usage = result.get("usage") if isinstance(result, dict) else None
-        tokens_used: int | None = None
-        if isinstance(usage, dict):
-            raw = usage.get("total_tokens")
-            if isinstance(raw, int):
-                tokens_used = raw
+        usage_parsed = self._parse_usage(result)
         logger.info(
-            "llm call (provider=%s, model=%s, latency_ms=%s, tokens_used=%s)",
+            "llm call (provider=%s, model=%s, latency_ms=%s, prompt_tokens=%s, completion_tokens=%s, total_tokens=%s)",
             "openai_compat",
             self.model,
             latency_ms,
-            tokens_used,
+            getattr(usage_parsed, "prompt_tokens", None),
+            getattr(usage_parsed, "completion_tokens", None),
+            getattr(usage_parsed, "total_tokens", None),
         )
 
-        return str(result["choices"][0]["message"]["content"])
+        text = str(result["choices"][0]["message"]["content"])
+        return text, usage_parsed, latency_ms
+
+    async def complete(
+        self,
+        messages: list[Message],
+        temperature: float = 0.7,
+        max_tokens: int | None = None,
+    ) -> str:
+        text, _usage, _latency_ms = await self._chat_completions(
+            messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        return text
+
+    async def complete_with_usage(
+        self,
+        messages: list[Message],
+        temperature: float = 0.7,
+        max_tokens: int | None = None,
+    ) -> LLMCompletionResult:
+        text, usage, _latency_ms = await self._chat_completions(
+            messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        return LLMCompletionResult(text=text, usage=usage)
 
     async def complete_json(
         self,

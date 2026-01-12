@@ -75,7 +75,15 @@ class _InMemoryStageRunRepo:
         self.stage_runs[(project_id, stage)] = sr
         return sr
 
-    async def set_progress(self, project_id: str, stage: str, *, progress: int, message: str) -> None:  # noqa: ARG002
+    async def set_progress(
+        self,
+        project_id: str,
+        stage: str,
+        *,
+        progress: int,
+        message: str,
+        metrics=None,  # noqa: ANN001, ARG002
+    ) -> None:  # noqa: ARG002
         return None
 
     async def mark_completed(self, project_id: str, stage: str, metadata=None):  # noqa: ANN001, ARG002

@@ -71,7 +71,7 @@ class ExportStage(Stage):
 
         style_raw = self.translation_style.lower().strip()
         try:
-            translation_style = TranslationStyle(style_raw)
+            translation_style = TranslationStyle.parse(style_raw)
         except ValueError as exc:
             raise ConfigurationError(
                 f"Unknown translation style: {self.translation_style}"

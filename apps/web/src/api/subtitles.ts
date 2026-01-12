@@ -1,7 +1,7 @@
 export type ExportFormat = 'srt' | 'vtt' | 'ass' | 'json'
 export type ContentMode = 'both' | 'primary_only' | 'secondary_only'
 export type PrimaryPosition = 'top' | 'bottom'
-export type TranslationStyle = 'per_chunk' | 'full' | 'per_segment'
+export type TranslationStyle = 'per_chunk' | 'full'
 
 export interface DownloadSubtitlesParams {
     format: ExportFormat
@@ -27,7 +27,6 @@ export interface SubtitleEditComputedEntry {
     secondary: string
     primary_per_chunk: string
     primary_full: string
-    primary_per_segment: string
     semantic_chunk_id: number | null
 }
 

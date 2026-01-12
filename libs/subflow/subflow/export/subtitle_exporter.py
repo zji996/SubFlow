@@ -18,21 +18,6 @@ from subflow.models.subtitle_types import (
 
 
 class SubtitleExporter:
-    @staticmethod
-    def _split_text_evenly(text: str, parts: int) -> list[str]:
-        cleaned = str(text or "")
-        if parts <= 0:
-            return []
-        if parts == 1:
-            return [cleaned]
-        n = len(cleaned)
-        out: list[str] = []
-        for i in range(parts):
-            start = round(i * n / parts)
-            end = round((i + 1) * n / parts)
-            out.append(cleaned[start:end])
-        return out
-
     def export_entries(self, entries: list[SubtitleEntry], config: SubtitleExportConfig) -> str:
         if config.primary_position not in {"top", "bottom"}:
             raise ValueError("primary_position must be 'top' or 'bottom'")
@@ -78,22 +63,6 @@ class SubtitleExporter:
                 if seg_id not in per_chunk_translation:
                     per_chunk_translation[seg_id] = str(ch.text or "")
 
-        # Build segment_id -> per-segment translation mapping (evenly split full chunk translation)
-        per_segment_translation: dict[int, str] = {}
-        if translation_style == TranslationStyle.PER_SEGMENT:
-            for semantic_chunk in chunks:
-                full = str(semantic_chunk.translation or "").strip()
-                if not full:
-                    continue
-                seg_ids = [int(x) for x in list(semantic_chunk.asr_segment_ids or [])]
-                seg_ids_in_order = [sid for sid in seg_ids if sid in segment_order]
-                seg_ids_in_order.sort(key=lambda sid: segment_order[sid])
-                if not seg_ids_in_order:
-                    continue
-                slices = self._split_text_evenly(full, len(seg_ids_in_order))
-                for sid, piece in zip(seg_ids_in_order, slices, strict=False):
-                    per_segment_translation[int(sid)] = str(piece)
-
         items: list[tuple[float, float, int, SubtitleEntry]] = []
         seq = 0
 
@@ -102,12 +71,11 @@ class SubtitleExporter:
             chunk_for_seg = chunk_by_segment_id.get(seg.id)
 
             # Determine primary text based on translation_style
-            if translation_style == TranslationStyle.PER_CHUNK:
-                primary = per_chunk_translation.get(seg.id, "")
-            elif translation_style == TranslationStyle.PER_SEGMENT:
-                primary = per_segment_translation.get(seg.id, "") or per_chunk_translation.get(seg.id, "")
-            else:
-                primary = (chunk_for_seg.translation if chunk_for_seg is not None else "") or ""
+            match translation_style:
+                case TranslationStyle.PER_CHUNK:
+                    primary = per_chunk_translation.get(seg.id, "")
+                case TranslationStyle.FULL:
+                    primary = (chunk_for_seg.translation if chunk_for_seg is not None else "") or ""
 
             primary = primary.strip()
             secondary = ((corrected.text if corrected is not None else "") or "").strip() or (
