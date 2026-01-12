@@ -16,17 +16,22 @@ from subflow.providers.llm.base import LLMCompletionResult, LLMProvider, LLMUsag
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
+
 
 class OpenAICompatProvider(LLMProvider):
     """OpenAI-compatible API provider (works with OpenAI, vLLM, etc.)."""
 
     def __init__(
         self,
-        base_url: str,
         api_key: str,
         model: str = "gpt-4",
+        base_url: str | None = None,
+        provider: str = "openai",
     ) -> None:
-        self.base_url = base_url.rstrip("/")
+        self.provider = provider
+        resolved = str(base_url or "").strip()
+        self.base_url = (resolved or DEFAULT_OPENAI_BASE_URL).rstrip("/")
         self.api_key = api_key
         self.model = model
         self._client: httpx.AsyncClient | None = None
@@ -90,14 +95,14 @@ class OpenAICompatProvider(LLMProvider):
         except httpx.TimeoutException as exc:
             logger.warning("llm request timeout: %s", exc)
             raise ProviderError(
-                "openai_compat",
+                self.provider,
                 str(exc),
                 error_code=ErrorCode.LLM_TIMEOUT,
             ) from exc
         except httpx.HTTPError as exc:
             logger.warning("llm request failed: %s", exc)
             raise ProviderError(
-                "openai_compat",
+                self.provider,
                 str(exc),
                 error_code=ErrorCode.LLM_FAILED,
             ) from exc
@@ -106,7 +111,7 @@ class OpenAICompatProvider(LLMProvider):
         usage_parsed = self._parse_usage(result)
         logger.info(
             "llm call (provider=%s, model=%s, latency_ms=%s, prompt_tokens=%s, completion_tokens=%s, total_tokens=%s)",
-            "openai_compat",
+            self.provider,
             self.model,
             latency_ms,
             getattr(usage_parsed, "prompt_tokens", None),

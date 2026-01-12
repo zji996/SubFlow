@@ -40,9 +40,24 @@ def get_llm_provider(config: Mapping[str, Any]) -> LLMProvider:
             from subflow.providers.llm.openai_compat import OpenAICompatProvider
 
             return OpenAICompatProvider(
-                base_url=config["base_url"],
                 api_key=config.get("api_key", ""),
                 model=config.get("model", "gpt-4"),
+                base_url=config.get("base_url"),
+                provider=str(provider_type),
+            )
+        case "gemini":
+            from subflow.providers.llm.gemini import GeminiProvider
+
+            api_key = str(config.get("api_key") or "").strip()
+            model = str(config.get("model") or "").strip()
+            if not api_key or not model:
+                raise ConfigurationError(
+                    f"Gemini provider requires api_key/model (got api_key={bool(api_key)} model={model!r})"
+                )
+            return GeminiProvider(
+                api_key=api_key,
+                model=model,
+                base_url=config.get("base_url"),
             )
         case _:
             raise ConfigurationError(f"Unknown LLM provider: {provider_type}")

@@ -76,7 +76,7 @@ ASR/LLM 通过抽象接口调用外部 API，配置驱动切换后端：
 | Provider | 环境变量 | 可选值 |
 |----------|---------|--------|
 | ASR | `ASR_PROVIDER` | `glm_asr`, `whisper_api` |
-| LLM | `LLM_FAST_PROVIDER` / `LLM_POWER_PROVIDER` | `openai`, `openai_compat`, `anthropic` |
+| LLM | `LLM_FAST_PROVIDER` / `LLM_POWER_PROVIDER` | `openai`, `gemini` |
 
 ## 禁止事项
 

@@ -46,7 +46,7 @@ class LLMProfileConfig(BaseSettings):
     """Optional LLM profile override (used for fast/power)."""
 
     provider: str = "openai"
-    base_url: str = "https://api.openai.com/v1"
+    base_url: str | None = None
     api_key: str = ""
     model: str = "gpt-4"
 
@@ -308,10 +308,19 @@ class Settings(BaseSettings):
         else:
             raise ConfigurationError(f"Unknown LLM profile: {profile!r} (expected: fast/power)")
 
-        provider = str(cfg.get("provider") or "").strip()
+        provider = str(cfg.get("provider") or "").strip().lower()
+        if not provider:
+            raise ConfigurationError(f"LLM profile {name!r} is not configured (missing provider)")
+
+        # `base_url` is optional (provider-specific):
+        # - openai/openai_compat: default to OpenAI public endpoint
+        # - gemini: optional; SDK default endpoint when unset
         base_url = str(cfg.get("base_url") or "").strip()
-        if not provider or not base_url:
-            raise ConfigurationError(
-                f"LLM profile {name!r} is not configured (need provider/base_url; got provider={provider!r} base_url={base_url!r})"
-            )
+        if provider in {"openai", "openai_compat"}:
+            cfg["base_url"] = base_url or "https://api.openai.com/v1"
+        else:
+            if base_url:
+                cfg["base_url"] = base_url
+            else:
+                cfg.pop("base_url", None)
         return cfg

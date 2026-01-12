@@ -2,6 +2,9 @@
 .env
 .env.local
 .env.*.local
+.env[0-9]*
+.env.*
+!.env.example
 
 # === 临时目录 (通过环境变量配置路径) ===
 /models/

@@ -46,7 +46,6 @@ class SubtitleExporter:
         corrected_index: dict[int, ASRCorrectedSegment] = dict(asr_corrected_segments or {})
 
         ordered_segments = sorted(asr_segments, key=lambda s: (float(s.start), float(s.end), int(s.id)))
-        segment_order = {int(seg.id): i for i, seg in enumerate(ordered_segments)}
 
         # Build segment_id -> chunk mapping
         chunk_by_segment_id: dict[int, SemanticChunk] = {}
