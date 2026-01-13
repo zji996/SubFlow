@@ -1,127 +1,200 @@
-# API 路由拆分优化计划
-
-## 背景
-
-当前 `apps/api/routes/projects.py` 文件有 **1288 行**，包含多种功能域的路由处理逻辑。虽然不存在架构层面的耦合问题，但文件过大影响了代码的可维护性和可读性。
+# 前端集成 LLM 健康检查实施计划
 
 ## 目标
 
-将 `projects.py` 按功能域拆分为多个独立的路由文件，保持 API 路径不变（`/projects/*`），同时提升代码组织结构。
+在前端关键位置展示 LLM 服务健康状态，帮助用户在操作前了解系统可用性。
 
-## 拆分方案
+## 设计原则
 
-### 目标文件结构
+1. **非侵入式**：状态展示不干扰主流程
+2. **按需加载**：不频繁轮询，只在关键时机获取状态
+3. **渐进增强**：状态获取失败不影响核心功能
 
-```
-apps/api/routes/
-├── __init__.py
-├── projects/              # 新建目录
-│   ├── __init__.py        # 导出 router
-│   ├── core.py           # 项目核心 CRUD（约 150 行）
-│   ├── execution.py      # Pipeline 执行相关（约 100 行）
-│   ├── preview.py        # 项目预览/段落查询（约 250 行）
-│   ├── artifacts.py      # Artifact 查询（约 80 行）
-│   ├── exports.py        # 导出历史管理（约 400 行）
-│   └── subtitles.py      # 字幕预览/下载/编辑（约 250 行）
-├── uploads.py            # 保持不变
-```
+## API 接口
 
-### 功能划分
+```typescript
+// GET /health/llm
+interface LLMHealthResponse {
+  status: 'healthy' | 'degraded' | 'unhealthy' | 'unknown'
+  providers: {
+    [key: string]: {  // 'fast' | 'power'
+      status: 'ok' | 'error' | 'unknown'
+      provider: string  // 'openai' | 'gemini'
+      model: string
+      last_success_at: string | null
+      last_error_at: string | null
+      last_error: string | null
+      last_latency_ms: number | null
+    }
+  }
+}
 
-| 文件 | 端点 | 职责 |
-|------|------|------|
-| **core.py** | `POST /`, `GET /`, `GET /{id}`, `DELETE /{id}` | 项目 CRUD |
-| **execution.py** | `POST /{id}/run`, `POST /{id}/run-all` | Pipeline 执行触发 |
-| **preview.py** | `GET /{id}/preview`, `GET /{id}/preview/segments` | 项目预览与段落分页 |
-| **artifacts.py** | `GET /{id}/artifacts/{stage}`, `GET /{id}/artifacts/{stage}/{name}` | Artifact 内容查询 |
-| **exports.py** | `GET /{id}/exports`, `POST /{id}/exports`, `GET /{id}/exports/{eid}`, `GET /{id}/exports/{eid}/download` | 导出历史 CRUD 与下载 |
-| **subtitles.py** | `GET /{id}/subtitles/preview`, `GET /{id}/subtitles/edit-data`, `GET /{id}/subtitles/download` | 字幕实时预览与下载 |
-
-### 共享依赖处理
-
-创建 `projects/_deps.py` 或直接在 `__init__.py` 中提供共享工具：
-
-1. **辅助函数**：
-   - `_service(request)` → 获取 `ProjectService`
-   - `_pool(request)` → 获取数据库连接池
-   - `_to_response(project)` → 转换为 `ProjectResponse`
-   - `_safe_filename_base(value)` → 安全文件名处理
-   - `_load_subtitle_materials(pool, project_id)` → 加载字幕素材
-
-2. **Pydantic Models**：
-   - 保留在各自文件中，或提取到 `projects/schemas.py`
-
-### 路由挂载方式
-
-```python
-# apps/api/routes/projects/__init__.py
-from fastapi import APIRouter
-
-from .core import router as core_router
-from .execution import router as execution_router
-from .preview import router as preview_router
-from .artifacts import router as artifacts_router
-from .exports import router as exports_router
-from .subtitles import router as subtitles_router
-
-router = APIRouter(prefix="/projects", tags=["projects"])
-
-router.include_router(core_router)
-router.include_router(execution_router)
-router.include_router(preview_router)
-router.include_router(artifacts_router)
-router.include_router(exports_router)
-router.include_router(subtitles_router)
+// POST /health/llm - 手动触发检查
+// 响应格式同上
 ```
 
-```python
-# apps/api/main.py（修改）
-from routes.projects import router as projects_router  # 路径不变
+## 功能实现
+
+### 1. API 客户端层
+
+新增健康检查 API 模块：
+- `getLLMHealth()` - 获取缓存状态
+- `checkLLMHealth()` - 手动触发检查
+
+### 2. 顶部导航栏状态指示器
+
+**位置**：Layout Header 右侧
+
+**交互设计**：
+- 默认显示小圆点指示器（直径 8-10px）
+- 颜色映射：
+  | 状态 | 颜色 | 说明 |
+  |------|------|------|
+  | healthy | 🟢 绿色 | 所有服务正常 |
+  | degraded | 🟡 黄色 | 部分服务异常 |
+  | unhealthy | 🔴 红色 | 所有服务异常 |
+  | unknown | ⚪ 灰色 | 尚无状态数据 |
+
+- 悬浮显示简要状态 Tooltip
+- 点击展开详细状态卡片（弹出层/下拉面板）
+
+**状态获取时机**：
+- 页面首次加载时获取一次
+- 用户手动点击刷新按钮时触发检查
+
+### 3. 新建项目页警告
+
+**位置**：表单顶部（Error 区域上方或下方）
+
+**触发条件**：页面加载时获取状态
+
+**展示逻辑**：
+- `unhealthy`：红色警告框，强烈提示
+  ```
+  ⚠️ LLM 服务不可用
+  当前所有 LLM 服务均不可用，项目处理将无法进行。请检查服务配置。
+  ```
+- `degraded`：黄色提示框，温和提示
+  ```
+  ⚠️ 部分 LLM 服务异常
+  Power LLM (gemini-2.0-flash) 最近调用失败，可能影响翻译质量。
+  ```
+- `healthy` / `unknown`：不显示
+
+### 4. 项目详情页运行提示（可选）
+
+**位置**：运行按钮附近
+
+**触发条件**：用户点击"运行"或"继续"按钮时
+
+**展示逻辑**：
+- 如果状态异常，弹出确认对话框
+- 用户可选择"仍然运行"或"取消"
+
+## 组件设计
+
+### LLMHealthIndicator 组件
+```
+位置：components/common/LLMHealthIndicator.tsx
+
+Props:
+- size?: 'sm' | 'md' | 'lg'  // 指示器大小
+- showLabel?: boolean        // 是否显示文字标签
+- onClick?: () => void       // 点击回调
+
+状态管理：
+- 内部 state 存储健康状态
+- 对外暴露 refresh() 方法
 ```
 
-## 实施步骤
+### LLMHealthPanel 组件
+```
+位置：components/common/LLMHealthPanel.tsx
 
-### 阶段 1：创建目录结构
-- 创建 `routes/projects/` 目录
-- 创建 `__init__.py` 和各子模块文件
-- 创建 `_deps.py` 放置共享依赖
+展示详细状态信息：
+- 每个 Provider 的状态卡片
+- 最后成功/失败时间
+- 最后延迟
+- 错误信息（如有）
+- "刷新状态"按钮（触发 POST /health/llm）
+```
 
-### 阶段 2：提取共享代码
-- 将 Pydantic models 提取到 `schemas.py`
-- 将辅助函数提取到 `_deps.py`
+### LLMHealthAlert 组件
+```
+位置：components/common/LLMHealthAlert.tsx
 
-### 阶段 3：拆分路由
-按以下顺序拆分（从简单到复杂）：
-1. `artifacts.py` - 最简单，约 80 行
-2. `core.py` - CRUD 操作，约 150 行
-3. `execution.py` - 执行触发，约 100 行
-4. `preview.py` - 预览查询，约 250 行
-5. `subtitles.py` - 字幕操作，约 250 行
-6. `exports.py` - 最复杂，约 400 行
+Props:
+- status: LLMHealthResponse
+- variant?: 'inline' | 'banner'
 
-### 阶段 4：更新入口
-- 更新 `routes/projects/__init__.py` 组合所有路由
-- 确保 `main.py` 导入路径正确
+根据状态渲染不同样式的警告框
+```
 
-### 阶段 5：验证与清理
-- 运行现有测试确保 API 兼容性
-- 删除旧的 `routes/projects.py`
+## 视觉设计
+
+### 状态指示器样式
+```css
+/* 健康 */
+.health-dot-healthy {
+  background: linear-gradient(135deg, #10b981, #34d399);
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.5);
+}
+
+/* 降级 */
+.health-dot-degraded {
+  background: linear-gradient(135deg, #f59e0b, #fbbf24);
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.5);
+}
+
+/* 不健康 */
+.health-dot-unhealthy {
+  background: linear-gradient(135deg, #ef4444, #f87171);
+  box-shadow: 0 0 8px rgba(239, 68, 68, 0.5);
+  animation: pulse 2s infinite;
+}
+
+/* 未知 */
+.health-dot-unknown {
+  background: linear-gradient(135deg, #6b7280, #9ca3af);
+}
+```
+
+### 详细面板样式
+- 使用现有的 `glass-card` 样式
+- 深色毛玻璃背景
+- 与整体设计语言一致
 
 ## 验收标准
 
-1. **API 兼容**：所有现有端点路径、请求/响应格式保持不变
-2. **测试通过**：`apps/api/tests/` 下所有测试通过
-3. **代码行数**：每个子模块不超过 400 行
-4. **无循环依赖**：模块间无循环导入
+1. **状态指示器**
+   - 在 Header 右侧可见
+   - 正确反映当前 LLM 健康状态
+   - 点击可查看详细信息
 
-## 风险与注意事项
+2. **新建项目页**
+   - 页面加载时检查状态
+   - unhealthy 时显示红色警告
+   - degraded 时显示黄色提示
 
-1. **导入路径变更**：其他模块如果直接从 `routes.projects` 导入，需要更新
-2. **共享状态**：`_service()` 等工厂函数需确保在新模块中可访问
-3. **类型提示**：拆分后需确保类型提示完整
+3. **详细面板**
+   - 显示每个 Provider 的状态
+   - 可手动刷新状态
+   - 刷新时有 loading 状态
+
+4. **性能**
+   - 页面加载不阻塞
+   - 状态获取失败静默处理
+
+## 实施顺序
+
+1. 新增 API 客户端模块
+2. 实现 LLMHealthIndicator 组件
+3. 集成到 Layout Header
+4. 实现 LLMHealthPanel 详细面板
+5. 实现 LLMHealthAlert 警告组件
+6. 集成到 NewProjectPage
+7. （可选）集成到 ProjectDetailPage
 
 ## 优先级
 
-**低** - 这是代码组织优化，不影响功能。建议在以下情况执行：
-- 需要为 `routes/` 添加新功能时
-- 有空闲时间进行技术债务清理时
+**中** - 提升用户体验，帮助用户提前发现服务问题

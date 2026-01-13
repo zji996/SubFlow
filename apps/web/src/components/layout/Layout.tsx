@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import { Outlet, Link, useLocation } from 'react-router-dom'
+import { LLMHealthIndicator } from '../common/LLMHealthIndicator'
 
 export default function Layout() {
     const location = useLocation()
@@ -30,6 +31,9 @@ export default function Layout() {
 
                     {/* Navigation */}
                     <nav className="flex items-center gap-1">
+                        <div className="mr-2">
+                            <LLMHealthIndicator />
+                        </div>
                         <NavLink
                             to="/projects"
                             active={location.pathname === '/projects'}
@@ -120,8 +124,8 @@ function NavLink({
         <Link
             to={to}
             className={`${baseClass} ${active
-                    ? 'bg-[--color-bg-elevated] text-[--color-text] shadow-sm'
-                    : 'text-[--color-text-muted] hover:text-[--color-text] hover:bg-[--color-bg-hover]'
+                ? 'bg-[--color-bg-elevated] text-[--color-text] shadow-sm'
+                : 'text-[--color-text-muted] hover:text-[--color-text] hover:bg-[--color-bg-hover]'
                 }`}
         >
             {icon}

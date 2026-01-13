@@ -4,6 +4,7 @@ import { createProject } from '../api/projects'
 import { uploadFile, type UploadProgress } from '../api/uploads'
 import { Spinner } from '../components/common/Spinner'
 import { Select } from '../components/common/Select'
+import { LLMHealthAlert } from '../components/common/LLMHealthAlert'
 
 const languages = [
     { code: 'zh', name: '中文', flag: '🇨🇳' },
@@ -202,8 +203,11 @@ export default function NewProjectPage() {
                 <div className="mb-8">
                     <h1 className="text-2xl font-bold text-gradient mb-2">创建新项目</h1>
                     <p className="text-[--color-text-muted]">
-                        上传视频或音频文件，开始自动翻译字幕
                     </p>
+                </div>
+
+                <div className="mb-6">
+                    <LLMHealthAlert />
                 </div>
 
                 {/* Error */}

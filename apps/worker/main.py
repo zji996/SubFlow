@@ -7,6 +7,7 @@ import logging
 from redis.asyncio import Redis
 
 from subflow.config import Settings
+from subflow.services.llm_health import init_llm_health_monitor
 from subflow.utils.logging_setup import setup_logging
 from handlers.project_handler import process_project_task
 
@@ -17,6 +18,7 @@ async def main():
     setup_logging(settings)
     logger = logging.getLogger("subflow.worker")
     redis = Redis.from_url(settings.redis_url, decode_responses=True)
+    init_llm_health_monitor(redis=redis)
 
     logger.info("Worker starting (redis=%s)", settings.redis_url)
 
