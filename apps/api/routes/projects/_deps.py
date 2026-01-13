@@ -64,7 +64,7 @@ def to_response(project: Project) -> ProjectResponse:
 
 
 def export_download_url(project_id: str, export_id: str) -> str:
-    return f"/projects/{project_id}/exports/{export_id}/download"
+    return f"/api/projects/{project_id}/exports/{export_id}/download"
 
 
 def export_to_response(project_id: str, exp: SubtitleExport) -> SubtitleExportResponse:
