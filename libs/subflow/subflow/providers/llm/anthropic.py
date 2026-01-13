@@ -1,4 +1,4 @@
-"""Anthropic LLM Provider implementation (Messages API)."""
+"""Anthropic LLM Provider implementation using official SDK."""
 
 from __future__ import annotations
 
@@ -7,8 +7,8 @@ import logging
 import time
 from typing import Any
 
-import httpx
-from tenacity import retry, stop_after_attempt, wait_exponential
+import anthropic
+from tenacity import RetryCallState, retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from subflow.error_codes import ErrorCode
 from subflow.exceptions import ProviderError
@@ -17,16 +17,48 @@ from subflow.providers.llm.base import LLMCompletionResult, LLMProvider, LLMUsag
 logger = logging.getLogger(__name__)
 
 DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com"
-ANTHROPIC_VERSION = "2023-06-01"
-DEFAULT_MAX_TOKENS = 1024
+DEFAULT_MAX_TOKENS = 4096
+
+_WAIT_NORMAL = wait_exponential(min=1, max=10)
+_WAIT_RATE_LIMIT = wait_exponential(min=2, max=30)
 
 
-def _coerce_int(value: object) -> int | None:
-    if isinstance(value, int):
-        return value
-    if isinstance(value, str) and value.isdigit():
-        return int(value)
-    return None
+class _RetryableLLMError(ProviderError):
+    def __init__(
+        self,
+        provider: str,
+        message: str,
+        *,
+        rate_limited: bool = False,
+        error_code: ErrorCode | str | None = None,
+    ) -> None:
+        super().__init__(provider, message, error_code=error_code)
+        self.rate_limited = rate_limited
+
+
+def _wait_retry(state: RetryCallState) -> float:
+    exc = state.outcome.exception() if state.outcome else None
+    if isinstance(exc, _RetryableLLMError) and exc.rate_limited:
+        return _WAIT_RATE_LIMIT(state)
+    return _WAIT_NORMAL(state)
+
+
+def _log_retry(state: RetryCallState) -> None:
+    exc = state.outcome.exception() if state.outcome else None
+    provider = "llm"
+    model = None
+    if state.args:
+        provider = getattr(state.args[0], "provider", provider)
+        model = getattr(state.args[0], "model", None)
+    wait_s = state.next_action.sleep if state.next_action else None
+    logger.warning(
+        "llm retrying (provider=%s, model=%s, attempt=%s, wait_s=%s, error=%s)",
+        provider,
+        model,
+        state.attempt_number,
+        wait_s,
+        exc,
+    )
 
 
 def _split_system_messages(messages: list[Message]) -> tuple[str | None, list[Message]]:
@@ -53,42 +85,8 @@ def _to_anthropic_messages(messages: list[Message]) -> list[dict[str, str]]:
     return out
 
 
-def _parse_text(result: object) -> str:
-    if not isinstance(result, dict):
-        return ""
-    content = result.get("content")
-    if isinstance(content, str):
-        return content.strip()
-    if not isinstance(content, list):
-        return ""
-    chunks: list[str] = []
-    for item in content:
-        if not isinstance(item, dict):
-            continue
-        if str(item.get("type") or "").strip().lower() != "text":
-            continue
-        text = item.get("text")
-        if isinstance(text, str) and text:
-            chunks.append(text)
-    return "".join(chunks).strip()
-
-
-def _parse_usage(result: object) -> LLMUsage | None:
-    if not isinstance(result, dict):
-        return None
-    usage = result.get("usage")
-    if not isinstance(usage, dict):
-        return None
-    prompt = _coerce_int(usage.get("input_tokens"))
-    completion = _coerce_int(usage.get("output_tokens"))
-    if prompt is None and completion is None:
-        return None
-    total = (prompt or 0) + (completion or 0) if (prompt is not None and completion is not None) else None
-    return LLMUsage(prompt_tokens=prompt, completion_tokens=completion, total_tokens=total)
-
-
 class AnthropicProvider(LLMProvider):
-    """Anthropic provider via Messages API."""
+    """Anthropic provider using official SDK with streaming support."""
 
     def __init__(
         self,
@@ -101,30 +99,26 @@ class AnthropicProvider(LLMProvider):
         if not self.api_key:
             raise ValueError("AnthropicProvider requires api_key")
         self.model = str(model or "").strip() or "claude-sonnet-4-20250514"
-        resolved = str(base_url or "").strip()
-        self.base_url = (resolved or DEFAULT_ANTHROPIC_BASE_URL).rstrip("/")
-        self._client: httpx.AsyncClient | None = None
-
-    def _endpoint(self) -> str:
-        if self.base_url.endswith("/v1"):
-            return f"{self.base_url}/messages"
-        return f"{self.base_url}/v1/messages"
-
-    def _headers(self) -> dict[str, str]:
-        return {
-            "Content-Type": "application/json",
-            "x-api-key": self.api_key,
-            "anthropic-version": ANTHROPIC_VERSION,
-        }
-
-    async def _get_client(self) -> httpx.AsyncClient:
-        if self._client is None:
-            self._client = httpx.AsyncClient(timeout=120.0)
-        return self._client
+        
+        # Handle base_url - SDK expects it without /v1 suffix
+        resolved = str(base_url or "").strip().rstrip("/")
+        if resolved.endswith("/v1"):
+            resolved = resolved[:-3]
+        self.base_url = resolved or None
+        
+        # Create async client
+        self._client = anthropic.AsyncAnthropic(
+            api_key=self.api_key,
+            base_url=self.base_url,
+            timeout=120.0,
+        )
 
     @retry(
+        retry=retry_if_exception_type(_RetryableLLMError),
         stop=stop_after_attempt(3),
-        wait=wait_exponential(min=1, max=10),
+        wait=_wait_retry,
+        before_sleep=_log_retry,
+        reraise=True,
     )
     async def _messages(
         self,
@@ -134,42 +128,82 @@ class AnthropicProvider(LLMProvider):
         max_tokens: int | None,
     ) -> tuple[str, LLMUsage | None, int]:
         system, non_system = _split_system_messages(messages)
-        payload: dict[str, Any] = {
-            "model": self.model,
-            "messages": _to_anthropic_messages(non_system),
-            "temperature": float(temperature),
-            "max_tokens": int(max_tokens) if max_tokens is not None else int(DEFAULT_MAX_TOKENS),
-        }
-        if system:
-            payload["system"] = system
-
-        client = await self._get_client()
+        
         started = time.perf_counter()
+        text_chunks: list[str] = []
+        usage_prompt: int | None = None
+        usage_completion: int | None = None
+
         try:
-            response = await client.post(
-                self._endpoint(),
-                headers=self._headers(),
-                json=payload,
-            )
-            response.raise_for_status()
-            result = response.json()
-        except httpx.TimeoutException as exc:
-            logger.warning("llm request timeout: %s", exc)
-            raise ProviderError(
+            # Use streaming mode for better proxy compatibility
+            async with self._client.messages.stream(
+                model=self.model,
+                messages=_to_anthropic_messages(non_system),
+                system=system or anthropic.NOT_GIVEN,
+                temperature=float(temperature),
+                max_tokens=int(max_tokens) if max_tokens is not None else DEFAULT_MAX_TOKENS,
+            ) as stream:
+                async for text in stream.text_stream:
+                    text_chunks.append(text)
+                
+                # Get final message for usage info
+                final_message = await stream.get_final_message()
+                if final_message and final_message.usage:
+                    usage_prompt = final_message.usage.input_tokens
+                    usage_completion = final_message.usage.output_tokens
+
+        except anthropic.RateLimitError as exc:
+            logger.warning("llm rate limited: %s", exc)
+            raise _RetryableLLMError(
                 self.provider,
                 str(exc),
-                error_code=ErrorCode.LLM_TIMEOUT,
+                rate_limited=True,
+                error_code=ErrorCode.LLM_FAILED,
             ) from exc
-        except httpx.HTTPError as exc:
+        except anthropic.APIStatusError as exc:
+            # 5xx errors are retryable
+            if exc.status_code >= 500:
+                logger.warning("llm server error: %s", exc)
+                raise _RetryableLLMError(
+                    self.provider,
+                    str(exc),
+                    error_code=ErrorCode.LLM_FAILED,
+                ) from exc
+            # 4xx errors (except rate limit) are not retryable
             logger.warning("llm request failed: %s", exc)
             raise ProviderError(
                 self.provider,
                 str(exc),
                 error_code=ErrorCode.LLM_FAILED,
             ) from exc
+        except anthropic.APIConnectionError as exc:
+            logger.warning("llm connection error: %s", exc)
+            raise _RetryableLLMError(
+                self.provider,
+                str(exc),
+                error_code=ErrorCode.LLM_TIMEOUT,
+            ) from exc
+        except anthropic.APITimeoutError as exc:
+            logger.warning("llm timeout: %s", exc)
+            raise _RetryableLLMError(
+                self.provider,
+                str(exc),
+                error_code=ErrorCode.LLM_TIMEOUT,
+            ) from exc
 
         latency_ms = int((time.perf_counter() - started) * 1000)
-        usage_parsed = _parse_usage(result)
+        usage_parsed: LLMUsage | None = None
+        if usage_prompt is not None or usage_completion is not None:
+            total = (
+                (usage_prompt or 0) + (usage_completion or 0)
+                if usage_prompt is not None and usage_completion is not None
+                else None
+            )
+            usage_parsed = LLMUsage(
+                prompt_tokens=usage_prompt,
+                completion_tokens=usage_completion,
+                total_tokens=total,
+            )
         logger.info(
             "llm call (provider=%s, model=%s, latency_ms=%s, prompt_tokens=%s, completion_tokens=%s, total_tokens=%s)",
             self.provider,
@@ -180,7 +214,7 @@ class AnthropicProvider(LLMProvider):
             getattr(usage_parsed, "total_tokens", None),
         )
 
-        return _parse_text(result), usage_parsed, latency_ms
+        return "".join(text_chunks), usage_parsed, latency_ms
 
     async def complete(
         self,
@@ -237,11 +271,9 @@ class AnthropicProvider(LLMProvider):
 
     async def close(self) -> None:
         if self._client is not None:
-            await self._client.aclose()
-            self._client = None
+            await self._client.close()
 
     async def __aenter__(self) -> "AnthropicProvider":
-        await self._get_client()
         return self
 
     async def __aexit__(

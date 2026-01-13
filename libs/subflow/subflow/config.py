@@ -314,7 +314,7 @@ class Settings(BaseSettings):
 
         # `base_url` is optional (provider-specific):
         # - openai/openai_compat: default to OpenAI public endpoint
-        # - gemini: optional; SDK default endpoint when unset
+        # - anthropic/claude: optional; defaults to Anthropic public endpoint
         base_url = str(cfg.get("base_url") or "").strip()
         if provider in {"openai", "openai_compat"}:
             cfg["base_url"] = base_url or "https://api.openai.com/v1"

@@ -33,7 +33,9 @@ def get_asr_provider(config: Mapping[str, Any]) -> ASRProvider:
 
 def get_llm_provider(config: Mapping[str, Any]) -> LLMProvider:
     """Get LLM provider based on configuration."""
-    provider_type = config.get("provider", "openai")
+    provider_type = str(config.get("provider", "openai") or "").strip().lower() or "openai"
+    if provider_type == "gemini":
+        raise ConfigurationError("Gemini provider has been removed (use: openai/openai_compat/anthropic/claude)")
 
     match provider_type:
         case "openai" | "openai_compat":
@@ -44,20 +46,6 @@ def get_llm_provider(config: Mapping[str, Any]) -> LLMProvider:
                 model=config.get("model", "gpt-4"),
                 base_url=config.get("base_url"),
                 provider=str(provider_type),
-            )
-        case "gemini":
-            from subflow.providers.llm.gemini import GeminiProvider
-
-            api_key = str(config.get("api_key") or "").strip()
-            model = str(config.get("model") or "").strip()
-            if not api_key or not model:
-                raise ConfigurationError(
-                    f"Gemini provider requires api_key/model (got api_key={bool(api_key)} model={model!r})"
-                )
-            return GeminiProvider(
-                api_key=api_key,
-                model=model,
-                base_url=config.get("base_url"),
             )
         case "anthropic" | "claude":
             from subflow.providers.llm.anthropic import AnthropicProvider

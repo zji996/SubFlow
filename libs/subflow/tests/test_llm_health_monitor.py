@@ -58,15 +58,15 @@ async def test_llm_health_monitor_stale_becomes_unknown() -> None:
 
     await monitor.report_success(
         profile="power",
-        provider="gemini",
-        model="gemini-2.0-flash",
+        provider="anthropic",
+        model="claude-sonnet-4-20250514",
         latency_ms=10,
         at_ts=old,
     )
     power = await monitor.provider_health(
         profile="power",
-        configured_provider="gemini",
-        configured_model="gemini-2.0-flash",
+        configured_provider="anthropic",
+        configured_model="claude-sonnet-4-20250514",
     )
     assert power.status == "unknown"
 
@@ -80,8 +80,8 @@ async def test_llm_health_monitor_overall_status() -> None:
     snap0 = await monitor.snapshot(
         fast_provider="openai",
         fast_model="gpt-4o-mini",
-        power_provider="gemini",
-        power_model="gemini-2.0-flash",
+        power_provider="anthropic",
+        power_model="claude-sonnet-4-20250514",
     )
     assert snap0.status == "unknown"
 
@@ -96,23 +96,23 @@ async def test_llm_health_monitor_overall_status() -> None:
     snap1 = await monitor.snapshot(
         fast_provider="openai",
         fast_model="gpt-4o-mini",
-        power_provider="gemini",
-        power_model="gemini-2.0-flash",
+        power_provider="anthropic",
+        power_model="claude-sonnet-4-20250514",
     )
     assert snap1.status == "degraded"
 
     # Healthy: both ok
     await monitor.report_success(
         profile="power",
-        provider="gemini",
-        model="gemini-2.0-flash",
+        provider="anthropic",
+        model="claude-sonnet-4-20250514",
         latency_ms=1,
         at_ts=t0 + 1.0,
     )
     snap2 = await monitor.snapshot(
         fast_provider="openai",
         fast_model="gpt-4o-mini",
-        power_provider="gemini",
-        power_model="gemini-2.0-flash",
+        power_provider="anthropic",
+        power_model="claude-sonnet-4-20250514",
     )
     assert snap2.status == "healthy"

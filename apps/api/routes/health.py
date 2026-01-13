@@ -83,7 +83,20 @@ async def _probe_profile(settings: Settings, *, profile: str) -> None:
         return None
 
     try:
-        _ = await llm.complete(messages, temperature=0.0, max_tokens=10)
+        _ = await asyncio.wait_for(
+            llm.complete(messages, temperature=0.0, max_tokens=10),
+            timeout=15.0,
+        )
+    except asyncio.TimeoutError:
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        await monitor.report_error(
+            profile=profile,
+            provider=provider,
+            model=model,
+            latency_ms=latency_ms,
+            error="timeout",
+        )
+        return None
     except Exception as exc:
         latency_ms = int((time.perf_counter() - started) * 1000)
         await monitor.report_error(
@@ -128,4 +141,3 @@ async def llm_health_check(request: Request) -> LLMHealthResponse:
         power_model=power_model,
     )
     return LLMHealthResponse.model_validate(snapshot.to_dict())
-
