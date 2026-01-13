@@ -55,7 +55,7 @@ bash scripts/manager.sh up
 ## 🛠️ 技术栈
 
 **音频**: FFmpeg, Demucs | **VAD**: NeMo MarbleNet | **ASR**: GLM-ASR  
-**LLM**: GPT-4 / Claude | **后端**: FastAPI | **前端**: React + Vite  
+**LLM**: GPT-4 / Anthropic | **后端**: FastAPI | **前端**: React + Vite  
 **存储**: PostgreSQL + MinIO + Redis
 
 ## 📝 License

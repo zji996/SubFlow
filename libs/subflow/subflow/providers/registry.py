@@ -59,6 +59,18 @@ def get_llm_provider(config: Mapping[str, Any]) -> LLMProvider:
                 model=model,
                 base_url=config.get("base_url"),
             )
+        case "anthropic" | "claude":
+            from subflow.providers.llm.anthropic import AnthropicProvider
+
+            api_key = str(config.get("api_key") or "").strip()
+            if not api_key:
+                raise ConfigurationError("Anthropic provider requires api_key")
+            model = str(config.get("model") or "claude-sonnet-4-20250514").strip()
+            return AnthropicProvider(
+                api_key=api_key,
+                model=model,
+                base_url=config.get("base_url"),
+            )
         case _:
             raise ConfigurationError(f"Unknown LLM provider: {provider_type}")
 

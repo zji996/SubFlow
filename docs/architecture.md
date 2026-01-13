@@ -75,7 +75,7 @@ SubFlow 是一个基于语义理解的视频字幕翻译系统。与传统的逐
 │  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌──────────────┐  ┌─────────┐  ┌─────────┐
 │  │ Stage 1 │─▶│ Stage 2 │─▶│ Stage 3 │─▶│   Stage 4    │─▶│ Stage 5 │─▶│ Stage 6 │
 │  │Audio    │  │VAD      │  │ASR      │  │LLM ASR Corr. │  │LLM      │  │Export   │
-│  │Process  │  │Segment  │  │Transcr. │  │(3.5)         │  │Translate│  │Format   │
+│  │Process  │  │Segment  │  │Transcr. │  │              │  │Translate│  │Format   │
 │  └─────────┘  └─────────┘  └─────────┘  └──────────────┘  └─────────┘  └─────────┘
 │       │            │            │            │            │            │
 │       ▼            ▼            ▼            ▼            ▼            │
@@ -346,7 +346,7 @@ ServiceAdapter
 │   └── MockASRAdapter       # 测试用 Mock
 ├── LLMAdapter
 │   ├── OpenAIAdapter
-│   ├── ClaudeAdapter
+│   ├── AnthropicAdapter
 │   └── LocalLLMAdapter
 └── AudioAdapter
     ├── FFmpegAdapter
