@@ -12,4 +12,3 @@ class VADProvider(ABC):
 
     async def close(self) -> None:  # pragma: no cover
         return None
-

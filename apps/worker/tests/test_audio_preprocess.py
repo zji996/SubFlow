@@ -23,7 +23,9 @@ class _DummyAudioProvider:
         out.write_bytes(b"")
         return str(out)
 
-    async def normalize_audio(self, input_path: str, output_path: str, *, target_db: float = -1.0) -> str:  # noqa: ARG002
+    async def normalize_audio(
+        self, input_path: str, output_path: str, *, target_db: float = -1.0
+    ) -> str:  # noqa: ARG002
         src = Path(input_path)
         dst = Path(output_path)
         dst.parent.mkdir(parents=True, exist_ok=True)
@@ -40,7 +42,9 @@ class _CountingNormalizeProvider(_DummyAudioProvider):
     def __init__(self) -> None:
         self.normalize_calls = 0
 
-    async def normalize_audio(self, input_path: str, output_path: str, *, target_db: float = -1.0) -> str:  # noqa: ARG002
+    async def normalize_audio(
+        self, input_path: str, output_path: str, *, target_db: float = -1.0
+    ) -> str:  # noqa: ARG002
         self.normalize_calls += 1
         return await super().normalize_audio(input_path, output_path, target_db=target_db)
 
@@ -159,7 +163,9 @@ async def test_audio_preprocess_reuses_cached_vocals(tmp_path, monkeypatch) -> N
                     return None
             return self._cached_vocals_hash
 
-        async def set_derived(self, *, transform: str, src_hash: str, dst_hash: str, params=None) -> None:  # noqa: ANN001,ARG002
+        async def set_derived(
+            self, *, transform: str, src_hash: str, dst_hash: str, params=None
+        ) -> None:  # noqa: ANN001,ARG002
             raise AssertionError("set_derived should not be called on cache hit")
 
         async def ingest_hashed_file(
@@ -220,7 +226,9 @@ async def test_audio_preprocess_reuses_cached_vocals(tmp_path, monkeypatch) -> N
     local_video.write_bytes(b"video")
 
     cached_hash = "6" * 64
-    cached_path = Path(settings.data_dir) / "blobs" / cached_hash[:2] / cached_hash[2:4] / cached_hash
+    cached_path = (
+        Path(settings.data_dir) / "blobs" / cached_hash[:2] / cached_hash[2:4] / cached_hash
+    )
     cached_path.parent.mkdir(parents=True, exist_ok=True)
     cached_path.write_bytes(b"cached vocals")
 

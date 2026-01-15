@@ -30,13 +30,17 @@ class ConcurrencyTracker:
 
     async def snapshot(self, service: ServiceType) -> ConcurrencyState:
         async with self._lock:
-            return ConcurrencyState(active=int(self._active.get(service, 0)), max=int(self._max.get(service, 1)))
+            return ConcurrencyState(
+                active=int(self._active.get(service, 0)), max=int(self._max.get(service, 1))
+            )
 
     @asynccontextmanager
     async def acquire(self, service: ServiceType) -> AsyncIterator[ConcurrencyState]:
         async with self._lock:
             self._active[service] = int(self._active.get(service, 0)) + 1
-            state = ConcurrencyState(active=int(self._active[service]), max=int(self._max.get(service, 1)))
+            state = ConcurrencyState(
+                active=int(self._active[service]), max=int(self._max.get(service, 1))
+            )
         try:
             yield state
         finally:
@@ -65,4 +69,3 @@ def get_concurrency_tracker(settings: Settings | None = None) -> ConcurrencyTrac
     else:
         _TRACKER.update_maxima(maxima)
     return _TRACKER
-

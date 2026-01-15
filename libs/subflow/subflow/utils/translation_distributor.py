@@ -130,7 +130,9 @@ def _allocate_counts_by_duration(total_pieces: int, segments: Sequence[ASRSegmen
     return counts
 
 
-def distribute_translation(translation: str, segments: Sequence[ASRSegment]) -> list[TranslationChunk]:
+def distribute_translation(
+    translation: str, segments: Sequence[ASRSegment]
+) -> list[TranslationChunk]:
     """Split a full translation into per-segment TranslationChunks.
 
     Rules:
@@ -205,4 +207,3 @@ def distribute_translation(translation: str, segments: Sequence[ASRSegment]) -> 
             chunk_text = units[-1].strip() or text
         out_units.append(TranslationChunk(text=chunk_text, segment_id=int(seg.id)))
     return out_units
-

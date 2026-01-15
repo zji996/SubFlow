@@ -20,7 +20,6 @@ export interface CreateExportRequest {
     format: ExportFormat
     content: ContentMode
     primary_position: PrimaryPosition
-    translation_style?: 'per_chunk' | 'full'
 }
 
 export async function listExports(projectId: string, options?: ApiRequestOptions): Promise<SubtitleExport[]> {

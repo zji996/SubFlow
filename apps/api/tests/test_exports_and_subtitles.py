@@ -90,7 +90,6 @@ def test_exports_create_list_download_from_entries(client, redis, settings) -> N
             "format": "srt",
             "content": "both",
             "primary_position": "top",
-            "translation_style": "per_chunk",
             "entries": [
                 {"start": 0.0, "end": 1.0, "primary_text": "甲", "secondary_text": "a"},
             ],
@@ -135,7 +134,6 @@ def test_exports_create_from_artifacts_and_subtitle_endpoints(client, redis, set
             "format": "srt",
             "content": "both",
             "primary_position": "top",
-            "translation_style": "per_chunk",
         },
     )
     assert res.status_code == 200
@@ -150,8 +148,7 @@ def test_exports_create_from_artifacts_and_subtitle_endpoints(client, redis, set
     payload = res.json()
     assert len(payload["computed_entries"]) == 2
     assert payload["computed_entries"][0]["segment_id"] == 0
-    assert payload["computed_entries"][0]["primary_per_chunk"] == "甲"
-    assert payload["computed_entries"][0]["primary_full"] == "甲乙"
+    assert payload["computed_entries"][0]["primary"] == "甲"
     assert payload["computed_entries"][0]["secondary"] == "A"
 
 
@@ -180,7 +177,6 @@ def test_exports_create_from_edited_entries_propagates_per_chunk_group(
             "format": "srt",
             "content": "both",
             "primary_position": "top",
-            "translation_style": "per_chunk",
             "edited_entries": [
                 {"segment_id": 0, "primary": "第一次改", "secondary": "AA"},
                 {"segment_id": 1, "primary": "最终改"},
@@ -197,7 +193,9 @@ def test_exports_create_from_edited_entries_propagates_per_chunk_group(
     assert "AA" in res.text
 
 
-def test_exports_per_segment_falls_back_to_per_chunk(client, redis, settings) -> None:
+def test_exports_create_from_artifacts_legacy_translation_chunks_still_work(
+    client, redis, settings
+) -> None:
     res = client.post(
         "/projects",
         json={"name": "demo", "media_url": "https://example.com/v.mp4", "target_language": "zh"},
@@ -220,7 +218,6 @@ def test_exports_per_segment_falls_back_to_per_chunk(client, redis, settings) ->
             "format": "srt",
             "content": "both",
             "primary_position": "top",
-            "translation_style": "per_segment",
         },
     )
     assert res.status_code == 200

@@ -146,7 +146,9 @@ class LLMHealthMonitor:
         return (now_ts - last) > float(self._stale_after_s)
 
     @staticmethod
-    def _derive_status(state: _ProfileState, now_ts: float, *, stale_after_s: int) -> ProviderHealthStatus:
+    def _derive_status(
+        state: _ProfileState, now_ts: float, *, stale_after_s: int
+    ) -> ProviderHealthStatus:
         last_success = state.last_success_ts
         last_error = state.last_error_ts
         if last_success is None and last_error is None:
@@ -337,7 +339,9 @@ class LLMHealthMonitor:
 
         success_1h, error_1h = await self._counts_1h(p)
 
-        provider = str(state.provider or "").strip() or str(configured_provider or "").strip() or "unknown"
+        provider = (
+            str(state.provider or "").strip() or str(configured_provider or "").strip() or "unknown"
+        )
         model = str(state.model or "").strip() or str(configured_model or "").strip() or "unknown"
 
         status = self._derive_status(state, now_ts, stale_after_s=self._stale_after_s)
@@ -398,7 +402,9 @@ def get_llm_health_monitor() -> LLMHealthMonitor:
     return _LLM_MONITOR
 
 
-def init_llm_health_monitor(*, redis: Redis | None, stale_after_s: int | None = None) -> LLMHealthMonitor:
+def init_llm_health_monitor(
+    *, redis: Redis | None, stale_after_s: int | None = None
+) -> LLMHealthMonitor:
     monitor = get_llm_health_monitor()
     monitor.set_redis(redis)
     if stale_after_s is not None:
@@ -450,7 +456,9 @@ class HealthReportingLLMProvider(LLMProvider):
     ) -> str:
         started = time.perf_counter()
         try:
-            out = await self._inner.complete(messages, temperature=temperature, max_tokens=max_tokens)
+            out = await self._inner.complete(
+                messages, temperature=temperature, max_tokens=max_tokens
+            )
         except Exception as exc:
             latency_ms = int((time.perf_counter() - started) * 1000)
             _fire_and_forget(

@@ -79,7 +79,9 @@ class AudioPreprocessStage(Stage):
                             resp.raise_for_status()
                             h = hashlib.sha256()
                             size = 0
-                            content_type = str(resp.headers.get("Content-Type") or "").strip() or None
+                            content_type = (
+                                str(resp.headers.get("Content-Type") or "").strip() or None
+                            )
                             with open(video_path, "wb") as f:
                                 async for chunk in resp.aiter_bytes():
                                     f.write(chunk)
@@ -128,7 +130,11 @@ class AudioPreprocessStage(Stage):
         if cached_vocals_hash:
             cached_path = blob_store.blob_path(cached_vocals_hash)
             if cached_path.exists():
-                logger.info("reuse cached vocals (audio_hash=%s, vocals_hash=%s)", audio_hash, cached_vocals_hash)
+                logger.info(
+                    "reuse cached vocals (audio_hash=%s, vocals_hash=%s)",
+                    audio_hash,
+                    cached_vocals_hash,
+                )
                 vocals_ref = await blob_store.ingest_hashed_file(
                     project_id=run_id,
                     file_type="vocals",
@@ -149,7 +155,7 @@ class AudioPreprocessStage(Stage):
                     self.name,
                     "Demucs separation failed. Demucs is required. "
                     "Ensure `demucs` is installed in the worker uv env and runnable, and set "
-                    "`CUDA_VISIBLE_DEVICES=1` if GPU0 is occupied."
+                    "`CUDA_VISIBLE_DEVICES=1` if GPU0 is occupied.",
                 ) from exc
 
             if bool(self.settings.audio.normalize):

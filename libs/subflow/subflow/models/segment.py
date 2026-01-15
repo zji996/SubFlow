@@ -22,6 +22,16 @@ class ASRSegment:
 
 
 @dataclass
+class SentenceSegment:
+    """Greedy sentence-aligned segment boundary (Stage 3 output)."""
+
+    id: int
+    start: float
+    end: float
+    region_id: int | None = None
+
+
+@dataclass
 class ASRCorrectedSegment:
     """Corrected view of an ASR segment (after applying LLM corrections)."""
 
@@ -44,10 +54,11 @@ class ASRMergedChunk:
 
 @dataclass
 class SegmentTranslation:
-    """Per-segment translation within a semantic chunk."""
+    """1:1 translation for an ASR segment (Stage 5 output)."""
 
-    asr_segment_id: int  # Reference to ASRSegment.id
-    text: str  # Translation for this specific segment
+    segment_id: int
+    source_text: str
+    translation: str
 
 
 @dataclass

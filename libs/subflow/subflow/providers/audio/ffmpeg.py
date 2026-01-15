@@ -36,7 +36,9 @@ class FFmpegProvider:
             )
         return result.stdout, result.stderr
 
-    async def extract_audio(self, video_path: str, output_path: str, max_duration_s: float | None = None) -> str:
+    async def extract_audio(
+        self, video_path: str, output_path: str, max_duration_s: float | None = None
+    ) -> str:
         """从视频提取音频，输出 16kHz 单声道 WAV"""
         video_path = str(video_path)
         output_path = str(output_path)
@@ -95,7 +97,9 @@ class FFmpegProvider:
         )
         return output_path
 
-    async def peak_normalize_wav(self, input_path: str, output_path: str, *, target_db: float = -1.0) -> str:
+    async def peak_normalize_wav(
+        self, input_path: str, output_path: str, *, target_db: float = -1.0
+    ) -> str:
         """Peak-normalize audio to `target_db` dBFS via ffmpeg volumedetect + volume."""
         input_path = str(input_path)
         output_path = str(output_path)

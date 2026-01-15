@@ -160,12 +160,8 @@ class Project:
             status=ProjectStatus(str(data.get("status") or ProjectStatus.PENDING.value)),
             current_stage=int(data.get("current_stage") or 0),
             artifacts=dict(data.get("artifacts") or {}),
-            stage_runs=[
-                StageRun.from_dict(x) for x in stage_runs_raw if isinstance(x, dict)
-            ],
-            exports=[
-                SubtitleExport.from_dict(x) for x in exports_raw if isinstance(x, dict)
-            ],
+            stage_runs=[StageRun.from_dict(x) for x in stage_runs_raw if isinstance(x, dict)],
+            exports=[SubtitleExport.from_dict(x) for x in exports_raw if isinstance(x, dict)],
             created_at=_dt_from_iso(data.get("created_at")) or _utcnow(),
             updated_at=_dt_from_iso(data.get("updated_at")) or _utcnow(),
         )

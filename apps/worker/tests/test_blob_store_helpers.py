@@ -24,4 +24,3 @@ async def test_blob_path_layout(tmp_path) -> None:
     h = "a" * 64
     p = store.blob_path(h)
     assert p == Path(settings.data_dir) / "blobs" / "aa" / "aa" / h
-

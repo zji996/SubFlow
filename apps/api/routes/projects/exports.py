@@ -19,7 +19,6 @@ from subflow.models.subtitle_types import (
     SubtitleEntry,
     SubtitleExportConfig,
     SubtitleFormat,
-    TranslationStyle,
 )
 from subflow.storage import get_artifact_store
 
@@ -72,12 +71,11 @@ async def create_export(
     payload: CreateSubtitleExportRequest,
 ) -> SubtitleExportDetailResponse:
     logger.info(
-        "create_export start project_id=%s format=%s content=%s primary_position=%s translation_style=%s entries=%s edited_entries=%s",
+        "create_export start project_id=%s format=%s content=%s primary_position=%s entries=%s edited_entries=%s",
         project_id,
         str(payload.format),
         str(payload.content),
         str(payload.primary_position),
-        str(payload.translation_style),
         int(len(payload.entries or [])),
         int(len(payload.edited_entries or [])),
     )
@@ -102,7 +100,6 @@ async def create_export(
 
         fmt = SubtitleFormat(payload.format)
         content_mode = SubtitleContent(payload.content)
-        translation_style = TranslationStyle.parse(payload.translation_style)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -153,7 +150,6 @@ async def create_export(
             format=fmt,
             content=content_mode,
             primary_position=payload.primary_position,
-            translation_style=translation_style,
             ass_style=ass_style,
         )
 
@@ -216,37 +212,24 @@ async def create_export(
                 for seg_id in list(semantic_chunk.asr_segment_ids or []):
                     chunk_by_segment_id.setdefault(int(seg_id), semantic_chunk)
 
-            per_chunk_translation: dict[int, str] = {}
-            translation_chunk_key_by_segment_id: dict[int, tuple[int, int]] = {}
+            translation_by_segment_id: dict[int, str] = {}
             for semantic_chunk in chunks:
-                for idx, ch in enumerate(list(semantic_chunk.translation_chunks or [])):
-                    key = (int(semantic_chunk.id), int(idx))
+                for ch in list(semantic_chunk.translation_chunks or []):
                     seg_id = int(ch.segment_id)
-                    per_chunk_translation.setdefault(seg_id, str(ch.text or "").strip())
-                    translation_chunk_key_by_segment_id.setdefault(seg_id, key)
+                    translation_by_segment_id.setdefault(seg_id, str(ch.text or "").strip())
+            for semantic_chunk in chunks:
+                chunk_translation = str(semantic_chunk.translation or "").strip()
+                if not chunk_translation:
+                    continue
+                for seg_id in list(semantic_chunk.asr_segment_ids or []):
+                    translation_by_segment_id.setdefault(int(seg_id), chunk_translation)
 
             ordered_segments = sorted(
                 asr_segments, key=lambda s: (float(s.start), float(s.end), int(s.id))
             )
             segment_order = {int(seg.id): i for i, seg in enumerate(ordered_segments)}
 
-            def _primary_group_key(segment_id: int):
-                seg_id = int(segment_id)
-                match translation_style:
-                    case TranslationStyle.PER_CHUNK:
-                        if seg_id in translation_chunk_key_by_segment_id:
-                            scid, idx = translation_chunk_key_by_segment_id[seg_id]
-                            return ("translation_chunk", int(scid), int(idx))
-                        return ("segment", seg_id)
-                    case TranslationStyle.FULL:
-                        chunk = chunk_by_segment_id.get(seg_id)
-                        if chunk is not None:
-                            return ("semantic_chunk", int(chunk.id))
-                        return ("segment", seg_id)
-                    case _:
-                        return ("segment", seg_id)
-
-            primary_override_by_group: dict[tuple, str] = {}
+            primary_override_by_segment: dict[int, str] = {}
             secondary_override_by_segment: dict[int, str] = {}
             known_segment_ids = set(segment_order.keys())
 
@@ -257,7 +240,7 @@ async def create_export(
                 if edited.secondary is not None:
                     secondary_override_by_segment[seg_id] = str(edited.secondary)
                 if edited.primary is not None:
-                    primary_override_by_group[_primary_group_key(seg_id)] = str(edited.primary)
+                    primary_override_by_segment[seg_id] = str(edited.primary)
 
             items: list[tuple[float, float, int, int, str, str]] = []
             for seg in ordered_segments:
@@ -272,20 +255,10 @@ async def create_export(
                     )
                 )
 
-                group_key = _primary_group_key(seg_id)
-                if group_key in primary_override_by_group:
-                    primary = str(primary_override_by_group[group_key]).strip()
+                if seg_id in primary_override_by_segment:
+                    primary = str(primary_override_by_segment[seg_id]).strip()
                 else:
-                    match translation_style:
-                        case TranslationStyle.PER_CHUNK:
-                            primary = str(per_chunk_translation.get(seg_id, "") or "").strip()
-                        case TranslationStyle.FULL:
-                            chunk = chunk_by_segment_id.get(seg_id)
-                            primary = str(
-                                (chunk.translation if chunk is not None else "") or ""
-                            ).strip()
-                        case _:
-                            primary = str(per_chunk_translation.get(seg_id, "") or "").strip()
+                    primary = str(translation_by_segment_id.get(seg_id, "") or "").strip()
 
                 items.append(
                     (
@@ -368,7 +341,6 @@ async def create_export(
                 "format": fmt.value,
                 "content_mode": content_mode.value,
                 "primary_position": payload.primary_position,
-                "translation_style": translation_style.value,
                 "ass_style": ass_style_dict if fmt == SubtitleFormat.ASS else None,
                 "has_entries": bool(generated_entries is not None),
             },

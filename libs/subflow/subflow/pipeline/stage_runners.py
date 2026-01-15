@@ -16,7 +16,12 @@ from subflow.models.segment import (
     SemanticChunk,
     VADSegment,
 )
-from subflow.pipeline.context import MetricsProgressReporter, PipelineContext, ProgressReporter, StageMetrics
+from subflow.pipeline.context import (
+    MetricsProgressReporter,
+    PipelineContext,
+    ProgressReporter,
+    StageMetrics,
+)
 from subflow.repositories import (
     ASRMergedChunkRepository,
     ASRSegmentRepository,
@@ -34,6 +39,7 @@ from subflow.stages import (
     VADStage,
 )
 from subflow.storage.artifact_store import ArtifactStore
+from subflow.utils.vad_frame_probs_io import encode_vad_frame_probs
 
 logger = logging.getLogger(__name__)
 
@@ -189,11 +195,20 @@ class AudioPreprocessRunner(StageRunner):
         audio_path = payload.get("audio_path")
         vocals_path = payload.get("vocals_audio_path")
         if video_path:
-            media_files["video"] = {"blob_sha256": _blob_hash_from_path(video_path), "path": str(video_path)}
+            media_files["video"] = {
+                "blob_sha256": _blob_hash_from_path(video_path),
+                "path": str(video_path),
+            }
         if audio_path:
-            media_files["audio"] = {"blob_sha256": _blob_hash_from_path(audio_path), "path": str(audio_path)}
+            media_files["audio"] = {
+                "blob_sha256": _blob_hash_from_path(audio_path),
+                "path": str(audio_path),
+            }
         if vocals_path:
-            media_files["vocals"] = {"blob_sha256": _blob_hash_from_path(vocals_path), "path": str(vocals_path)}
+            media_files["vocals"] = {
+                "blob_sha256": _blob_hash_from_path(vocals_path),
+                "path": str(vocals_path),
+            }
         if media_files:
             await project_repo.update_media_files(project.id, media_files)
             project.media_files = dict(media_files)
@@ -233,7 +248,9 @@ class VADRunner(StageRunner):
             regions = sorted(vad_regions, key=lambda r: float(r.start))
             region_idx = 0
             for seg in vad_segments:
-                while region_idx < len(regions) and float(seg.start) >= float(regions[region_idx].end):
+                while region_idx < len(regions) and float(seg.start) >= float(
+                    regions[region_idx].end
+                ):
                     region_idx += 1
                 assigned: int | None = None
                 for j in range(region_idx, len(regions)):
@@ -246,7 +263,19 @@ class VADRunner(StageRunner):
                         break
                 seg.region_id = assigned
         await vad_repo.bulk_insert(project.id, vad_segments)
-        return ctx, {}
+
+        artifacts: dict[str, str] = {}
+        frame_probs = ctx.get("vad_frame_probs")
+        hop_s = float(ctx.get("vad_frame_hop_s") or 0.0)
+        if frame_probs is not None and hop_s > 0:
+            ident = await store.save(
+                project.id,
+                self.stage_name.value,
+                "vad_frame_probs.bin",
+                encode_vad_frame_probs(frame_probs=frame_probs, frame_hop_s=hop_s),
+            )
+            artifacts["vad_frame_probs.bin"] = ident
+        return ctx, artifacts
 
 
 class ASRRunner(StageRunner):
@@ -323,7 +352,9 @@ class LLMASRCorrectionRunner(StageRunner):
         finally:
             await _maybe_close(stage)
 
-        corrected_map: dict[int, ASRCorrectedSegment] = dict(ctx.get("asr_corrected_segments") or {})
+        corrected_map: dict[int, ASRCorrectedSegment] = dict(
+            ctx.get("asr_corrected_segments") or {}
+        )
         await asr_repo.update_corrected_texts(
             project.id,
             {int(k): str(v.text or "") for k, v in corrected_map.items()},

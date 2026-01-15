@@ -120,19 +120,27 @@ class _InMemoryASRRepo:
         self._segs[str(project_id)] = list(segments)
 
     async def update_corrected_texts(self, project_id: str, corrections: dict[int, str]) -> None:
-        self._corrected[str(project_id)] = {int(k): str(v) for k, v in dict(corrections or {}).items()}
+        self._corrected[str(project_id)] = {
+            int(k): str(v) for k, v in dict(corrections or {}).items()
+        }
 
     async def get_corrected_map(self, project_id: str) -> dict[int, str]:
         return dict(self._corrected.get(str(project_id), {}))
 
-    async def get_by_project(self, project_id: str, *, use_corrected: bool = False) -> list[ASRSegment]:
+    async def get_by_project(
+        self, project_id: str, *, use_corrected: bool = False
+    ) -> list[ASRSegment]:
         out: list[ASRSegment] = []
         corrected = self._corrected.get(str(project_id), {})
         for seg in list(self._segs.get(str(project_id), [])):
             text = seg.text
             if use_corrected and int(seg.id) in corrected:
                 text = corrected[int(seg.id)]
-            out.append(ASRSegment(id=seg.id, start=seg.start, end=seg.end, text=text, language=seg.language))
+            out.append(
+                ASRSegment(
+                    id=seg.id, start=seg.start, end=seg.end, text=text, language=seg.language
+                )
+            )
         return out
 
 

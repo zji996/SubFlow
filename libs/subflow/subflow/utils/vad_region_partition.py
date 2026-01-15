@@ -53,4 +53,3 @@ def partition_vad_regions_by_gap(
 
     out.append(RegionPartition(start_region_id=start, end_region_id=len(regions) - 1))
     return out
-

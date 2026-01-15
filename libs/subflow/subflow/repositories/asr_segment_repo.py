@@ -40,7 +40,9 @@ class ASRSegmentRepository(BaseRepository):
                     )
             await conn.commit()
 
-    async def get_by_project(self, project_id: str, *, use_corrected: bool = False) -> list[ASRSegment]:
+    async def get_by_project(
+        self, project_id: str, *, use_corrected: bool = False
+    ) -> list[ASRSegment]:
         async with self.connection() as conn:
             async with conn.cursor(row_factory=dict_row) as cur:
                 await cur.execute(
@@ -85,7 +87,9 @@ class ASRSegmentRepository(BaseRepository):
         return {int(r["segment_index"]): str(r["corrected_text"] or "") for r in rows}
 
     async def update_corrected_texts(self, project_id: str, corrections: dict[int, str]) -> None:
-        rows = [(str(text or ""), project_id, int(i)) for i, text in dict(corrections or {}).items()]
+        rows = [
+            (str(text or ""), project_id, int(i)) for i, text in dict(corrections or {}).items()
+        ]
         async with self.connection() as conn:
             async with conn.cursor() as cur:
                 if rows:
@@ -99,7 +103,9 @@ class ASRSegmentRepository(BaseRepository):
                     )
             await conn.commit()
 
-    async def get_by_time_range(self, project_id: str, start: float, end: float) -> list[ASRSegment]:
+    async def get_by_time_range(
+        self, project_id: str, start: float, end: float
+    ) -> list[ASRSegment]:
         start_f = float(start)
         end_f = float(end)
         if end_f < start_f:
@@ -134,4 +140,3 @@ class ASRSegmentRepository(BaseRepository):
             async with conn.cursor() as cur:
                 await cur.execute("DELETE FROM asr_segments WHERE project_id=%s", (project_id,))
             await conn.commit()
-

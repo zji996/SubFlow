@@ -31,6 +31,7 @@ from subflow.repositories import (
     VADSegmentRepository,
 )
 from subflow.storage.artifact_store import ArtifactStore
+from subflow.utils.vad_frame_probs_io import decode_vad_frame_probs
 
 logger = logging.getLogger(__name__)
 
@@ -220,15 +221,23 @@ class PipelineOrchestrator:
         if project.current_stage >= _STAGE_INDEX[StageName.AUDIO_PREPROCESS]:
             media_files = dict(getattr(project, "media_files", {}) or {})
             if media_files:
-                for k, ctx_key in (("video", "video_path"), ("audio", "audio_path"), ("vocals", "vocals_audio_path")):
+                for k, ctx_key in (
+                    ("video", "video_path"),
+                    ("audio", "audio_path"),
+                    ("vocals", "vocals_audio_path"),
+                ):
                     entry = media_files.get(k)
                     if isinstance(entry, dict):
                         path = entry.get("path")
                         if path:
                             ctx[ctx_key] = str(path)
-            if not (ctx.get("video_path") and ctx.get("audio_path") and ctx.get("vocals_audio_path")):
+            if not (
+                ctx.get("video_path") and ctx.get("audio_path") and ctx.get("vocals_audio_path")
+            ):
                 try:
-                    stage1 = await self.store.load_json(project.id, StageName.AUDIO_PREPROCESS.value, "stage1.json")
+                    stage1 = await self.store.load_json(
+                        project.id, StageName.AUDIO_PREPROCESS.value, "stage1.json"
+                    )
                     if isinstance(stage1, dict):
                         for key in ("video_path", "audio_path", "vocals_audio_path"):
                             value = stage1.get(key)
@@ -239,9 +248,23 @@ class PipelineOrchestrator:
 
         if project.current_stage >= _STAGE_INDEX[StageName.VAD]:
             ctx["vad_segments"] = await self.vad_repo.get_by_project(project.id)
+            # Stage 3 expects coarse regions; persist a compatible key for in-memory runs,
+            # and try to hydrate frame-level VAD probabilities from artifacts for resume.
+            ctx["vad_regions"] = list(ctx.get("vad_segments") or [])
+            try:
+                raw = await self.store.load(project.id, StageName.VAD.value, "vad_frame_probs.bin")
+            except FileNotFoundError:
+                raw = b""
+            if raw:
+                probs, hop_s = decode_vad_frame_probs(raw)
+                if probs and hop_s > 0:
+                    ctx["vad_frame_probs"] = probs
+                    ctx["vad_frame_hop_s"] = float(hop_s)
 
         if project.current_stage >= _STAGE_INDEX[StageName.ASR]:
-            ctx["asr_segments"] = await self.asr_repo.get_by_project(project.id, use_corrected=False)
+            ctx["asr_segments"] = await self.asr_repo.get_by_project(
+                project.id, use_corrected=False
+            )
             ctx["full_transcript"] = " ".join(
                 seg.text for seg in list(ctx.get("asr_segments") or []) if (seg.text or "").strip()
             )
@@ -250,7 +273,9 @@ class PipelineOrchestrator:
                 ctx["asr_merged_chunks"] = merged_chunks
             else:
                 try:
-                    merged = await self.store.load_json(project.id, StageName.ASR.value, "asr_merged_chunks.json")
+                    merged = await self.store.load_json(
+                        project.id, StageName.ASR.value, "asr_merged_chunks.json"
+                    )
                     if isinstance(merged, list):
                         from subflow.models.serializers import deserialize_asr_merged_chunks
 
@@ -267,10 +292,14 @@ class PipelineOrchestrator:
                         seg_id = int(seg.id)
                         if seg_id in corrected_map:
                             seg.text = str(corrected_map[seg_id] or "")
-                        full[seg_id] = ASRCorrectedSegment(id=seg_id, asr_segment_id=seg_id, text=str(seg.text or ""))
+                        full[seg_id] = ASRCorrectedSegment(
+                            id=seg_id, asr_segment_id=seg_id, text=str(seg.text or "")
+                        )
                 ctx["asr_corrected_segments"] = full
                 ctx["full_transcript"] = " ".join(
-                    seg.text for seg in list(ctx.get("asr_segments") or []) if (seg.text or "").strip()
+                    seg.text
+                    for seg in list(ctx.get("asr_segments") or [])
+                    if (seg.text or "").strip()
                 )
 
         if project.current_stage >= _STAGE_INDEX[StageName.LLM]:
@@ -289,7 +318,9 @@ class PipelineOrchestrator:
                 return
         project.stage_runs.append(stage_run)
 
-    async def run_stage(self, project: Project, stage: StageName) -> tuple[Project, PipelineContext]:
+    async def run_stage(
+        self, project: Project, stage: StageName
+    ) -> tuple[Project, PipelineContext]:
         if stage not in _STAGE_INDEX:
             raise ValueError(f"Unknown stage: {stage}")
         db_project = await self.project_repo.get(project.id)
@@ -305,7 +336,9 @@ class PipelineOrchestrator:
             return project, ctx
 
         project.status = ProjectStatus.PROCESSING
-        await self.project_repo.update_status(project.id, ProjectStatus.PROCESSING.value, project.current_stage)
+        await self.project_repo.update_status(
+            project.id, ProjectStatus.PROCESSING.value, project.current_stage
+        )
         ctx = await self._hydrate_context(project)
 
         for stage_name in _STAGE_ORDER:
@@ -363,7 +396,9 @@ class PipelineOrchestrator:
                 run.status = StageRunStatus.COMPLETED
                 run.completed_at = datetime.now(tz=timezone.utc)
                 if run.started_at is not None and run.completed_at is not None:
-                    run.duration_ms = int((run.completed_at - run.started_at).total_seconds() * 1000)
+                    run.duration_ms = int(
+                        (run.completed_at - run.started_at).total_seconds() * 1000
+                    )
                 run.progress = 100
                 run.progress_message = "completed"
                 await self.stage_run_repo.mark_completed(
@@ -391,11 +426,15 @@ class PipelineOrchestrator:
                 await self._notify_update(project)
 
             except Exception as exc:
-                logger.exception("stage failed (project_id=%s, stage=%s)", project.id, stage_name.value)
+                logger.exception(
+                    "stage failed (project_id=%s, stage=%s)", project.id, stage_name.value
+                )
                 run.status = StageRunStatus.FAILED
                 run.completed_at = datetime.now(tz=timezone.utc)
                 if run.started_at is not None and run.completed_at is not None:
-                    run.duration_ms = int((run.completed_at - run.started_at).total_seconds() * 1000)
+                    run.duration_ms = int(
+                        (run.completed_at - run.started_at).total_seconds() * 1000
+                    )
                 run.error_code = self._infer_error_code(stage_name, exc)
                 run.error_message = self._infer_error_message(exc)
                 run.error = str(exc)
@@ -443,7 +482,9 @@ class PipelineOrchestrator:
 
         return project, ctx
 
-    async def run_all(self, project: Project, from_stage: StageName | None = None) -> tuple[Project, PipelineContext]:
+    async def run_all(
+        self, project: Project, from_stage: StageName | None = None
+    ) -> tuple[Project, PipelineContext]:
         if from_stage is not None:
             if from_stage not in _STAGE_INDEX:
                 raise ValueError(f"Unknown stage: {from_stage}")

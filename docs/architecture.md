@@ -147,68 +147,135 @@ SubFlow 是一个基于语义理解的视频字幕翻译系统。与传统的逐
 **输入 Artifact**: `vocals.wav`
 **输出 Artifact**:
 - `vad_segments.json` (细分片段时间戳列表)
-- `vad_regions.json` (非连续语音区域列表，可选)
+- `vad_regions.json` (非连续语音区域列表)
+- `vad_frame_probs` (帧级概率张量，用于贪心句子对齐模式)
 
 ---
 
 ### Stage 3: ASR 语音识别 (Speech Recognition)
 
-**目标**：将语音段落转换为文本。
+SubFlow 支持两种 ASR 策略，可通过配置切换：
+
+#### 模式 A：传统分段识别（默认）
 
 ```
 ┌────────────┐     ┌────────────┐     ┌────────────┐
 │ Audio Segs │────▶│  GLM-ASR   │────▶│   Text +   │
-│            │     │            │     │ Timestamps │
+│ (VAD切分)   │     │            │     │ Timestamps │
 └────────────┘     └────────────┘     └────────────┘
 ```
 
-**关键决策**：
-- 分段识别策略：每个 VAD segment 独立送入 ASR（时间戳继承自 VAD）
-- 合并识别策略：在每个 VAD region 内将 segments 合并为 ≤`ASR_MAX_CHUNK_S` 的识别块（默认 15s），再做整体 ASR（上下文更完整）
-- 时间戳由 VAD 段边界继承，ASR 仅负责文本输出
-- 可并行处理多个段落
+- 每个 VAD segment 独立送入 ASR
+- 合并识别：在每个 VAD region 内合并为 ≤`GREEDY_SENTENCE_ASR_FALLBACK_CHUNK_S` 的块
+- 问题：短 segment 容易产生幻觉，切分边界可能在句中
 
-**输入 Artifact**: `vad_segments.json` + `vocals.wav`
+#### 模式 B：贪心句子对齐（Greedy Sentence-Aligned ASR）🆕
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│  贪心句子对齐模式：ASR 标点 + VAD Valley 联合定位句子边界              │
+├──────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  对每个 VAD region:                                                  │
+│    cursor = region.start                                             │
+│                                                                      │
+│    while cursor < region.end:                                        │
+│      1. 切取 [cursor, cursor+max_chunk_s] 音频 → ASR 识别            │
+│         "This is great. And then we..."                              │
+│                                                                      │
+│      2. 找第一个句末标点（。？！）→ 估算时间位置                      │
+│         sentence = "This is great."                                  │
+│         estimated_time = cursor + chunk_duration * char_ratio        │
+│                                                                      │
+│      3. VAD Valley 搜索：在 estimated_time ± 1s 找静音点             │
+│         actual_cut_time = find_vad_valley(...)                       │
+│                                                                      │
+│      4. 输出 SentenceSegment(cursor, actual_cut_time, sentence)      │
+│         cursor = actual_cut_time → 继续下一轮                        │
+│                                                                      │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+**核心价值**：
+- 每次 ASR 输入 ≥ 几秒，有足够上下文，**消除短 segment 幻觉**
+- 利用 ASR 输出的标点符号定位句子边界，**保证每段是完整句子**
+- 用 VAD 帧级概率找静音点，**切分点在自然停顿处**
+
+**关键理解**：
+
+> 贪心方法估计的**区间**才是核心价值，而非直接使用其文本输出。
+> 有了精确的区间后，可以继续走"合并识别 + 分段识别" 进入 Stage 4 进行 LLM 纠错。
+
+**配置项**：
+```env
+GREEDY_SENTENCE_ASR_MAX_CHUNK_S=10.0         # 初始窗口（秒）
+GREEDY_SENTENCE_ASR_FALLBACK_CHUNK_S=15.0    # 扩展窗口（未找到句末标点时）
+GREEDY_SENTENCE_ASR_VAD_SEARCH_RANGE_S=1.0   # VAD valley 搜索范围 ±秒
+GREEDY_SENTENCE_ASR_VAD_VALLEY_THRESHOLD=0.3 # 低于该概率视为 valley（静音）
+GREEDY_SENTENCE_ASR_PARALLEL_GAP_S=2.0       # region gap >= 该值可并行
+GREEDY_SENTENCE_ASR_CLAUSE_ENDINGS=，,、：:—– # 备选切分标点（逗号/顿号/冒号/破折号等）
+```
+
+**输入 Artifact**: `vad_regions.json` + `vad_frame_probs` + `vocals.wav`
 **输出 Artifact**:
-- `asr_segments.json` (分段 ASR，带时间戳的文本列表)
-- `asr_merged_chunks.json` (region 内合并识别块列表，含 `segment_ids` 与整体识别 `text`)
-- `full_transcript.txt` (基于分段 ASR 的完整文本)
+- `sentence_segments.json` (句子级 segment，含时间戳)
+- `asr_segments.json` (分段 ASR，用于 Stage 4 纠错)
+- `asr_merged_chunks.json` (合并 ASR，用于 Stage 4 纠错)
+- `full_transcript.txt`
 
 ---
 
 ### Stage 4: LLM ASR 纠错 (LLM ASR Correction)
 
-**目标**：对比 “region 内合并识别” 与 “分段识别”，纠正分段 ASR 的听错字、漏字、多字，并删除明显幻觉。
+**目标**：对比 "合并识别" 与 "分段识别"，纠正分段 ASR 的听错字、漏字、多字，并删除明显幻觉。
+
+**与贪心句子对齐模式的配合**：
+
+当启用贪心句子对齐模式时，Stage 4 的输入来自 Stage 3 的 `sentence_segments`：
+
+```
+贪心句子对齐输出:
+  sentence_segments = [
+    {start: 0.0,  end: 3.5,  text: "This is great."},
+    {start: 3.5,  end: 7.2,  text: "And then we go."},
+    ...
+  ]
+
+Stage 4 处理:
+  对每个 merged_chunk (若干相邻 sentence_segments):
+    1. merged_asr_text = ASR(合并音频)        → 上下文完整
+    2. per_segment_asr = [ASR(seg) for seg]   → 时间戳精确
+    3. LLM 对比纠错 → corrected_segments
+```
+
+**关键理解**：
+- 贪心方法的**区间**是核心价值，提供了精确的句子边界
+- Stage 4 使用这些区间重新进行"合并识别 + 分段识别"
+- LLM 对比两种识别结果，纠正错误，输出最终文本
 
 **并行策略（2026-01）**：
 - 纠错任务以 `asr_merged_chunks` 为单位执行
-- `asr_merged_chunks` 的窗口大小由 `ASR_MAX_CHUNK_S` 控制（默认 15s；与 Stage 3 共享）
-- 当启用 `PARALLEL_ENABLED=true` 时，会基于 `vad_regions` 的 region gap（`PARALLEL_MIN_GAP_SECONDS`）进行分区；分区间可并行处理
-- LLM 并发上限按服务类型控制：`CONCURRENCY_LLM_FAST` / `CONCURRENCY_LLM_POWER`（取决于 `LLM_ASR_CORRECTION=fast|power`）
+- `asr_merged_chunks` 的窗口大小由 `GREEDY_SENTENCE_ASR_FALLBACK_CHUNK_S` 控制（默认 15s）
+- 当启用 `PARALLEL_ENABLED=true` 时，基于 `vad_regions` 的 region gap 进行分区并行
+- LLM 并发上限按服务类型控制：`CONCURRENCY_LLM_FAST` / `CONCURRENCY_LLM_POWER`
 
-**输入 Artifact**: `asr_segments.json` + `asr_merged_chunks.json`  
+**输入 Artifact**: `sentence_segments.json` + `asr_segments.json` + `asr_merged_chunks.json`  
 **输出 Artifact**: `asr_corrected_segments.json`
+
 
 ---
 
 ### Stage 5: LLM 多 Pass 翻译 (Multi-Pass LLM Translation)
 
-**目标**：通过 2 轮 LLM 处理，完成全局理解、语义块切分与翻译（ASR 纠错已在 Stage 4 完成）。
+**目标**：通过 2 轮 LLM 处理，完成全局理解与逐段翻译（ASR 纠错已在 Stage 4 完成）。
 
 - Pass 1（全局理解）：生成 `global_context`（主题/领域/风格/术语表/翻译注意事项）
-- Pass 2（语义切分+翻译）：从（已纠错的）`asr_segments` 生成 `semantic_chunks`，包含：
-  - `translation`：完整意译
-  - `translation_chunks`：翻译分段（每个 chunk 对应 1 个 `segment_id`；由程序从 `translation` 自动生成）
-
-**并行策略（2026-01）**：
-- Pass 2 在启用 `PARALLEL_ENABLED=true` 时，会按 `vad_regions` 的 region gap 分区；每个分区内部保持贪心串行，分区间并行
-- 分区间无 `【上一轮翻译】` 上下文传递；Pass 1 的 `global_context` 共享
-- LLM 并发上限按服务类型控制：`CONCURRENCY_LLM_POWER`（或当 `LLM_SEMANTIC_TRANSLATION=fast` 时使用 `CONCURRENCY_LLM_FAST`）
+- Pass 2（逐段翻译）：对 `asr_corrected_segments` 逐段翻译（1:1），支持批量并行（按 LLM 并发上限控制）
 
 Stage 5 的详细提示词、输入/输出 JSON、以及给 LLM 的实际输入（System Prompt + User Input）已拆到：`docs/llm_multi_pass.md`。
 
 **输入 Artifact**: `asr_segments.json` + `full_transcript.txt`  
-**输出 Artifact**: `global_context.json` + `semantic_chunks.json`
+**输出 Artifact**: `global_context.json` + `semantic_chunks.json`（每段 1 条；不再做多段合并）
 
 ---
 
@@ -216,9 +283,7 @@ Stage 5 的详细提示词、输入/输出 JSON、以及给 LLM 的实际输入�
 
 **目标**：将翻译结果导出为标准字幕格式（默认双行字幕）。
 
-- 第一行（主字幕）：根据 `translation_style` 配置
-  - `per_chunk`（标点均分，默认）：按 `translation_chunks` 分配（每个段落取其对应 `segment_id` 的翻译片段）
-  - `full`：`SemanticChunk.translation`（完整意译，所有段落共享）
+- 第一行（主字幕）：每个段落对应的译文（1:1）
 - 第二行（子字幕）：每个 `ASRSegment` 对应的 `ASRCorrectedSegment.text`（若无纠错则回退到 `ASRSegment.text`）
 
 ```

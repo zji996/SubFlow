@@ -6,6 +6,7 @@ from subflow.models.segment import (
     ASRCorrectedSegment,
     ASRMergedChunk,
     ASRSegment,
+    SentenceSegment,
     SemanticChunk,
     SegmentTranslation,
     VADSegment,
@@ -15,7 +16,6 @@ from subflow.models.subtitle_types import (
     SubtitleEntry,
     SubtitleExportConfig,
     SubtitleFormat,
-    TranslationStyle,
 )
 
 __all__ = [
@@ -24,6 +24,7 @@ __all__ = [
     "ASRCorrectedSegment",
     "ASRMergedChunk",
     "ASRSegment",
+    "SentenceSegment",
     "Project",
     "ProjectStatus",
     "SemanticChunk",
@@ -36,6 +37,5 @@ __all__ = [
     "SubtitleExportSource",
     "SubtitleExportConfig",
     "SubtitleFormat",
-    "TranslationStyle",
     "VADSegment",
 ]

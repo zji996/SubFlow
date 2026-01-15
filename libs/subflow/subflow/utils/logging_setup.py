@@ -53,4 +53,3 @@ def setup_logging(settings: Settings) -> None:
     logger.handlers = handlers
     logger.propagate = False
     setattr(logger, "_subflow_configured", True)
-

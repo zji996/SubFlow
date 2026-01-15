@@ -8,7 +8,13 @@ from __future__ import annotations
 
 from typing import Any, Protocol, TypedDict, runtime_checkable
 
-from subflow.models.segment import ASRCorrectedSegment, ASRMergedChunk, ASRSegment, SemanticChunk, VADSegment
+from subflow.models.segment import (
+    ASRCorrectedSegment,
+    ASRMergedChunk,
+    ASRSegment,
+    SemanticChunk,
+    VADSegment,
+)
 
 
 class ProgressReporter(Protocol):

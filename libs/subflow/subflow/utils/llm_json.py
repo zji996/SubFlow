@@ -19,18 +19,18 @@ JSONData = dict[str, Any] | list[Any]
 
 def parse_llm_json(text: str) -> JSONData:
     """Parse JSON from LLM output, supporting Markdown code blocks.
-    
+
     Handles:
     - Plain JSON
     - ```json ... ``` code blocks
     - ``` ... ``` code blocks
-    
+
     Args:
         text: Raw LLM output text
-        
+
     Returns:
         Parsed JSON as dict or list
-        
+
     Raises:
         json.JSONDecodeError: If JSON parsing fails
     """
@@ -38,19 +38,19 @@ def parse_llm_json(text: str) -> JSONData:
     # Some providers/models may include explicit reasoning blocks.
     text = _THINK_BLOCK_RE.sub("", text).strip()
     text = _THINK_TAG_RE.sub("", text).strip()
-    
+
     # Try to extract Markdown code blocks
     patterns = [
-        r'```json\s*([\s\S]*?)\s*```',  # ```json ... ```
-        r'```\s*([\s\S]*?)\s*```',       # ``` ... ```
+        r"```json\s*([\s\S]*?)\s*```",  # ```json ... ```
+        r"```\s*([\s\S]*?)\s*```",  # ``` ... ```
     ]
-    
+
     for pattern in patterns:
         match = re.search(pattern, text)
         if match:
             text = match.group(1).strip()
             break
-    
+
     # Parse JSON (best-effort extraction when extra text is present)
     first_error: json.JSONDecodeError | None = None
     try:
@@ -92,7 +92,7 @@ def parse_llm_json(text: str) -> JSONData:
 @dataclass
 class JSONRetryResult:
     """Result of JSON parsing with retry."""
-    
+
     data: JSONData | None
     success: bool
     attempts: int
@@ -101,12 +101,12 @@ class JSONRetryResult:
 
 class LLMJSONHelper:
     """Helper for LLM JSON parsing with retry logic."""
-    
+
     MAX_RETRIES = 3
-    
+
     def __init__(self, llm: LLMProvider, max_retries: int = 3) -> None:
         """Initialize helper.
-        
+
         Args:
             llm: LLM provider instance
             max_retries: Maximum retry attempts (default 3)
@@ -131,29 +131,31 @@ class LLMJSONHelper:
         temperature: float = 0.3,
     ) -> JSONData:
         """Complete LLM request and parse JSON with retry.
-        
+
         Args:
             messages: Conversation messages
             temperature: LLM temperature
-            
+
         Returns:
             Parsed JSON data
-            
+
         Raises:
             ValueError: If JSON parsing fails after all retries
         """
         current_messages = list(messages)
         last_error: Exception | None = None
         last_response: str = ""
-        
+
         for attempt in range(self.max_retries):
             try:
-                completion = await self.llm.complete_with_usage(current_messages, temperature=temperature)
+                completion = await self.llm.complete_with_usage(
+                    current_messages, temperature=temperature
+                )
                 last_response = completion.text
                 return parse_llm_json(completion.text)
             except json.JSONDecodeError as e:
                 last_error = e
-                
+
                 if attempt < self.max_retries - 1:
                     # Add error feedback for retry
                     current_messages = current_messages + [
@@ -166,13 +168,13 @@ class LLMJSONHelper:
                             ),
                         ),
                     ]
-        
+
         raise ValueError(
             f"JSON 解析失败，已重试 {self.max_retries} 次。\n"
             f"最后错误：{last_error}\n"
             f"最后响应：{last_response[:500]}..."
         )
-    
+
     async def complete_json(
         self,
         messages: list[Message],
@@ -193,9 +195,13 @@ class LLMJSONHelper:
 
         for attempt in range(self.max_retries):
             try:
-                completion = await self.llm.complete_with_usage(current_messages, temperature=temperature)
+                completion = await self.llm.complete_with_usage(
+                    current_messages, temperature=temperature
+                )
                 last_response = completion.text
-                last_usage = completion.usage or self._estimate_usage(current_messages, completion.text)
+                last_usage = completion.usage or self._estimate_usage(
+                    current_messages, completion.text
+                )
                 return parse_llm_json(completion.text), last_usage
             except json.JSONDecodeError as exc:
                 last_error = exc

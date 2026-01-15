@@ -76,8 +76,12 @@ class ASSFormatter(SubtitleFormatter):
         secondary_color = _ass_color(style.secondary_color, default="&H00CCCCCC")
         primary_outline_color = _ass_color(style.primary_outline_color, default="&H00000000")
         secondary_outline_color = _ass_color(style.secondary_outline_color, default="&H00000000")
-        primary_outline_width = _safe_int(style.primary_outline_width, default=2, min_value=0, max_value=10)
-        secondary_outline_width = _safe_int(style.secondary_outline_width, default=1, min_value=0, max_value=10)
+        primary_outline_width = _safe_int(
+            style.primary_outline_width, default=2, min_value=0, max_value=10
+        )
+        secondary_outline_width = _safe_int(
+            style.secondary_outline_width, default=1, min_value=0, max_value=10
+        )
 
         header = """[Script Info]
 Title: SubFlow Generated Subtitles

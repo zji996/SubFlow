@@ -98,15 +98,12 @@ class SubtitleEditComputedEntry(BaseModel):
     start: float
     end: float
     secondary: str
-    primary_per_chunk: str
-    primary_full: str
-    semantic_chunk_id: int | None = None
+    primary: str
 
 
 class SubtitleEditDataResponse(BaseModel):
     asr_segments: list[dict[str, Any]]
     asr_corrected_segments: dict[int, dict[str, Any]]
-    semantic_chunks: list[dict[str, Any]]
     computed_entries: list[SubtitleEditComputedEntry]
 
 
@@ -127,7 +124,6 @@ class CreateSubtitleExportRequest(BaseModel):
     format: str = "srt"
     content: str = "both"
     primary_position: str = "top"
-    translation_style: str = "per_chunk"
     ass_style: dict[str, Any] | None = None
     entries: list[CreateSubtitleExportEntry] | None = None
     edited_entries: list[EditedSubtitleExportEntry] | None = None

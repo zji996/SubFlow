@@ -35,7 +35,12 @@ class VADStage(Stage):
         audio_path = str(context["vocals_audio_path"])
         logger.info("vad start (audio_path=%s)", audio_path)
         try:
-            timestamps = self.provider.detect(audio_path)
+            frame_probs = None
+            detect_with_probs = getattr(self.provider, "detect_with_probs", None)
+            if callable(detect_with_probs):
+                timestamps, frame_probs = detect_with_probs(audio_path)
+            else:
+                timestamps = self.provider.detect(audio_path)
         except Exception as exc:
             model_path = Path(self.settings.vad.nemo_model_path)
             hint = (
@@ -46,13 +51,24 @@ class VADStage(Stage):
             )
             raise StageExecutionError(self.name, hint) from exc
         context = cast(PipelineContext, dict(context))
-        context["vad_segments"] = [VADSegment(start=s, end=e) for s, e in timestamps]
+        # Stage 3 now does sentence-aligned splitting, so keep VAD output coarse by default.
+        # For backward compatibility, we still populate both keys.
         regions = getattr(self.provider, "last_regions", None)
-        if isinstance(regions, list) and regions:
-            context["vad_regions"] = [VADSegment(start=s, end=e) for s, e in regions]
+        vad_regions = (
+            [VADSegment(start=s, end=e) for s, e in regions]
+            if isinstance(regions, list) and regions
+            else [VADSegment(start=s, end=e) for s, e in timestamps]
+        )
+        context["vad_regions"] = vad_regions
+        context["vad_segments"] = list(vad_regions)
+
+        if frame_probs is not None:
+            context["vad_frame_probs"] = frame_probs
+            context["vad_frame_hop_s"] = float(getattr(self.provider, "frame_hop_s", 0.02))
         logger.info(
-            "vad done (segments=%d, regions=%d)",
+            "vad done (segments=%d, regions=%d, frame_probs=%s)",
             len(context.get("vad_segments") or []),
             len(context.get("vad_regions") or []),
+            "yes" if context.get("vad_frame_probs") is not None else "no",
         )
         return context

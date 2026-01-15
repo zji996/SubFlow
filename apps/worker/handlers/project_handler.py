@@ -57,7 +57,9 @@ async def process_project_task(task: dict[str, Any], redis: Redis, settings: Set
     )
 
     try:
-        await project_repo.update_status(project_id, ProjectStatus.PROCESSING.value, project.current_stage)
+        await project_repo.update_status(
+            project_id, ProjectStatus.PROCESSING.value, project.current_stage
+        )
 
         typ = str(task.get("type", "")).strip()
         if typ == "run_all":
@@ -90,10 +92,14 @@ async def process_project_task(task: dict[str, Any], redis: Redis, settings: Set
                 project, _ = await orchestrator.run_stage(project, StageName.LLM)
             elif not project.auto_workflow and project.status == ProjectStatus.PROCESSING:
                 project.status = ProjectStatus.PAUSED
-                await project_repo.update_status(project_id, ProjectStatus.PAUSED.value, project.current_stage)
+                await project_repo.update_status(
+                    project_id, ProjectStatus.PAUSED.value, project.current_stage
+                )
         else:
             return
         await project_repo.update_status(project_id, project.status.value, project.current_stage)
 
     except Exception as exc:
-        await project_repo.update_status(project_id, ProjectStatus.FAILED.value, project.current_stage, error_message=str(exc))
+        await project_repo.update_status(
+            project_id, ProjectStatus.FAILED.value, project.current_stage, error_message=str(exc)
+        )

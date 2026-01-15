@@ -4,7 +4,7 @@ from subflow.utils.llm_json import parse_llm_json
 
 
 def test_parse_llm_json_handles_think_prefix() -> None:
-    raw = "<think>reasoning...</think>\n{\"a\": 1, \"b\": [2, 3]}\n"
+    raw = '<think>reasoning...</think>\n{"a": 1, "b": [2, 3]}\n'
     out = parse_llm_json(raw)
     assert out == {"a": 1, "b": [2, 3]}
 

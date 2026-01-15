@@ -46,7 +46,9 @@ class ProjectRepository(BaseRepository):
             name=str(row["name"]),
             media_url=str(row["media_url"]),
             media_files=_as_dict(row.get("media_files")),
-            source_language=row.get("source_language") if row.get("source_language") is not None else None,
+            source_language=row.get("source_language")
+            if row.get("source_language") is not None
+            else None,
             target_language=str(row.get("target_language") or "zh"),
             auto_workflow=bool(row.get("auto_workflow", True)),
             status=ProjectStatus(str(row.get("status") or ProjectStatus.PENDING.value)),
@@ -54,8 +56,12 @@ class ProjectRepository(BaseRepository):
             artifacts={},
             stage_runs=[],
             exports=[],
-            created_at=row.get("created_at") if isinstance(row.get("created_at"), datetime) else _utcnow(),
-            updated_at=row.get("updated_at") if isinstance(row.get("updated_at"), datetime) else _utcnow(),
+            created_at=row.get("created_at")
+            if isinstance(row.get("created_at"), datetime)
+            else _utcnow(),
+            updated_at=row.get("updated_at")
+            if isinstance(row.get("updated_at"), datetime)
+            else _utcnow(),
         )
 
     async def create(self, project: Project) -> Project:

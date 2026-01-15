@@ -29,7 +29,9 @@ class SemanticChunkRepository(BaseRepository):
                                 project_id,
                                 int(chunk.id),
                                 str(chunk.text or ""),
-                                str(chunk.translation or "") if chunk.translation is not None else None,
+                                str(chunk.translation or "")
+                                if chunk.translation is not None
+                                else None,
                                 [int(x) for x in list(chunk.asr_segment_ids or [])],
                             ),
                         )

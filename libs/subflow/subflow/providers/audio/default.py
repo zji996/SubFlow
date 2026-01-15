@@ -30,5 +30,9 @@ class FFmpegDemucsAudioProvider(AudioProvider):
     async def separate_vocals(self, audio_path: str, output_dir: str) -> str:
         return await self._demucs.separate_vocals(str(audio_path), str(output_dir))
 
-    async def normalize_audio(self, input_path: str, output_path: str, *, target_db: float = -1.0) -> str:
-        return await self._ffmpeg.peak_normalize_wav(str(input_path), str(output_path), target_db=float(target_db))
+    async def normalize_audio(
+        self, input_path: str, output_path: str, *, target_db: float = -1.0
+    ) -> str:
+        return await self._ffmpeg.peak_normalize_wav(
+            str(input_path), str(output_path), target_db=float(target_db)
+        )

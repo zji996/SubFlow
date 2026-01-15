@@ -92,7 +92,9 @@ def test_srt_export_primary_only_excludes_secondary_line() -> None:
         chunks=chunks,
         asr_segments=asr_segments,
         asr_corrected_segments=corrected,
-        config=SubtitleExportConfig(format=SubtitleFormat.SRT, content=SubtitleContent.PRIMARY_ONLY),
+        config=SubtitleExportConfig(
+            format=SubtitleFormat.SRT, content=SubtitleContent.PRIMARY_ONLY
+        ),
     )
     assert "你好世界" in out
     assert "hello world" not in out

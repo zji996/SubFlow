@@ -7,4 +7,3 @@ from subflow.export.formatters.srt import SRTFormatter
 from subflow.export.formatters.vtt import VTTFormatter
 
 __all__ = ["ASSFormatter", "JSONFormatter", "SRTFormatter", "SubtitleFormatter", "VTTFormatter"]
-

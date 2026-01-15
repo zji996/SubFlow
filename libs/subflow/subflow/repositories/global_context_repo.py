@@ -88,4 +88,3 @@ class GlobalContextRepository(BaseRepository):
             async with conn.cursor() as cur:
                 await cur.execute("DELETE FROM global_contexts WHERE project_id=%s", (project_id,))
             await conn.commit()
-

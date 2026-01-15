@@ -9,7 +9,7 @@ from subflow.stages.export import ExportStage
 
 @pytest.mark.asyncio
 async def test_export_stage_generates_subtitle_text(settings) -> None:
-    stage = ExportStage(settings, format="srt", content="both", primary_position="top", translation_style="per_chunk")
+    stage = ExportStage(settings, format="srt", content="both", primary_position="top")
     ctx = {
         "project_id": "proj_1",
         "asr_segments": [ASRSegment(id=0, start=0.0, end=1.0, text="a", language="en")],
@@ -32,6 +32,9 @@ async def test_export_stage_generates_subtitle_text(settings) -> None:
 @pytest.mark.asyncio
 async def test_export_stage_rejects_unknown_format(settings) -> None:
     stage = ExportStage(settings, format="nope")
-    ctx = {"project_id": "proj_1", "asr_segments": [ASRSegment(id=0, start=0.0, end=1.0, text="a", language="en")]}
+    ctx = {
+        "project_id": "proj_1",
+        "asr_segments": [ASRSegment(id=0, start=0.0, end=1.0, text="a", language="en")],
+    }
     with pytest.raises(ConfigurationError, match="Unknown subtitle format"):
         await stage.execute(ctx)

@@ -1,6 +1,13 @@
 from __future__ import annotations
 
-from subflow.models.segment import ASRCorrectedSegment, ASRMergedChunk, ASRSegment, SemanticChunk, TranslationChunk, VADSegment
+from subflow.models.segment import (
+    ASRCorrectedSegment,
+    ASRMergedChunk,
+    ASRSegment,
+    SemanticChunk,
+    TranslationChunk,
+    VADSegment,
+)
 from subflow.models.serializers import (
     deserialize_asr_corrected_segments,
     deserialize_asr_merged_chunks,
@@ -47,7 +54,9 @@ def test_asr_corrected_segments_roundtrip_sorted() -> None:
 
 def test_asr_merged_chunks_roundtrip() -> None:
     merged = [
-        ASRMergedChunk(region_id=0, chunk_id=0, start=0.0, end=2.0, segment_ids=[0, 1], text="hello"),
+        ASRMergedChunk(
+            region_id=0, chunk_id=0, start=0.0, end=2.0, segment_ids=[0, 1], text="hello"
+        ),
     ]
     raw = serialize_asr_merged_chunks(merged)
     restored = deserialize_asr_merged_chunks(raw)
@@ -95,7 +104,13 @@ def test_deserialize_semantic_chunks_legacy_segment_translations() -> None:
 
 def test_deserialize_semantic_chunks_fallback_full_translation() -> None:
     raw = [
-        {"id": 0, "text": "x", "translation": "甲", "asr_segment_ids": [0], "translation_chunks": []},
+        {
+            "id": 0,
+            "text": "x",
+            "translation": "甲",
+            "asr_segment_ids": [0],
+            "translation_chunks": [],
+        },
     ]
     restored = deserialize_semantic_chunks(raw)
     assert restored[0].translation_chunks

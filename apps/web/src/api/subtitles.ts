@@ -1,13 +1,11 @@
 export type ExportFormat = 'srt' | 'vtt' | 'ass' | 'json'
 export type ContentMode = 'both' | 'primary_only' | 'secondary_only'
 export type PrimaryPosition = 'top' | 'bottom'
-export type TranslationStyle = 'per_chunk' | 'full'
 
 export interface DownloadSubtitlesParams {
     format: ExportFormat
     content: ContentMode
     primary_position: PrimaryPosition
-    translation_style?: TranslationStyle
 }
 
 export function getDownloadSubtitlesUrl(projectId: string, params: DownloadSubtitlesParams): string {
@@ -15,7 +13,6 @@ export function getDownloadSubtitlesUrl(projectId: string, params: DownloadSubti
         format: params.format,
         content: params.content,
         primary_position: params.primary_position,
-        translation_style: params.translation_style || 'per_chunk',
     })
     return `/api/projects/${projectId}/subtitles/download?${qs.toString()}`
 }
@@ -25,9 +22,7 @@ export interface SubtitleEditComputedEntry {
     start: number
     end: number
     secondary: string
-    primary_per_chunk: string
-    primary_full: string
-    semantic_chunk_id: number | null
+    primary: string
 }
 
 export interface SubtitleEditDataResponse {
@@ -41,17 +36,6 @@ export interface SubtitleEditDataResponse {
         id: number
         asr_segment_id: number
         text: string
-    }>
-    semantic_chunks: Array<{
-        id: number
-        chunk_index: number
-        text: string
-        translation: string
-        asr_segment_ids: number[]
-        translation_chunks: Array<{
-            text: string
-            segment_ids: number[]
-        }>
     }>
     computed_entries: SubtitleEditComputedEntry[]
 }

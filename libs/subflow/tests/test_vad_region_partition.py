@@ -30,4 +30,3 @@ def test_partition_vad_regions_by_gap_splits_when_gap_reaches_threshold() -> Non
     ]
     parts = partition_vad_regions_by_gap(regions, min_gap_seconds=0.3)
     assert [(p.start_region_id, p.end_region_id) for p in parts] == [(0, 0), (1, 1)]
-

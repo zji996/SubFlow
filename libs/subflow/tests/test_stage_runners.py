@@ -5,7 +5,14 @@ from dataclasses import dataclass
 import pytest
 
 from subflow.models.project import Project
-from subflow.models.segment import ASRCorrectedSegment, ASRMergedChunk, ASRSegment, SemanticChunk, TranslationChunk, VADSegment
+from subflow.models.segment import (
+    ASRCorrectedSegment,
+    ASRMergedChunk,
+    ASRSegment,
+    SemanticChunk,
+    TranslationChunk,
+    VADSegment,
+)
 from subflow.pipeline.stage_runners import (
     ASRRunner,
     AudioPreprocessRunner,
@@ -66,7 +73,9 @@ class _FakeASRRepo:
         self.inserted[str(project_id)] = list(segments)
 
     async def update_corrected_texts(self, project_id: str, corrections: dict[int, str]) -> None:
-        self.corrected[str(project_id)] = {int(k): str(v) for k, v in dict(corrections or {}).items()}
+        self.corrected[str(project_id)] = {
+            int(k): str(v) for k, v in dict(corrections or {}).items()
+        }
 
 
 class _FakeGlobalContextRepo:
@@ -141,7 +150,9 @@ async def test_audio_preprocess_runner_persists_stage1(settings, monkeypatch) ->
     global_context_repo = _FakeGlobalContextRepo()
     semantic_chunk_repo = _FakeSemanticChunkRepo()
 
-    stage = _FakeStage({"video_path": "v.mp4", "audio_path": "a.wav", "vocals_audio_path": "vocals.wav"})
+    stage = _FakeStage(
+        {"video_path": "v.mp4", "audio_path": "a.wav", "vocals_audio_path": "vocals.wav"}
+    )
     monkeypatch.setattr("subflow.pipeline.stage_runners.AudioPreprocessStage", lambda _s: stage)
 
     ctx, artifacts = await runner.run(
@@ -173,7 +184,12 @@ async def test_vad_runner_persists_segments_to_repo(settings, monkeypatch) -> No
     asr_merged_chunk_repo = _FakeASRMergedChunkRepo()
     global_context_repo = _FakeGlobalContextRepo()
     semantic_chunk_repo = _FakeSemanticChunkRepo()
-    stage = _FakeStage({"vad_segments": [VADSegment(start=0.0, end=1.0)], "vad_regions": [VADSegment(start=0.0, end=2.0)]})
+    stage = _FakeStage(
+        {
+            "vad_segments": [VADSegment(start=0.0, end=1.0)],
+            "vad_regions": [VADSegment(start=0.0, end=2.0)],
+        }
+    )
     monkeypatch.setattr("subflow.pipeline.stage_runners.VADStage", lambda _s: stage)
 
     _ctx, artifacts = await runner.run(
@@ -208,7 +224,11 @@ async def test_asr_runner_persists_segments_transcript_and_merged(settings, monk
         {
             "asr_segments": [ASRSegment(id=0, start=0.0, end=1.0, text="hi", language="en")],
             "full_transcript": "hi",
-            "asr_merged_chunks": [ASRMergedChunk(region_id=0, chunk_id=0, start=0.0, end=1.0, segment_ids=[0], text="hi")],
+            "asr_merged_chunks": [
+                ASRMergedChunk(
+                    region_id=0, chunk_id=0, start=0.0, end=1.0, segment_ids=[0], text="hi"
+                )
+            ],
         }
     )
     monkeypatch.setattr("subflow.pipeline.stage_runners.ASRStage", lambda _s: stage)

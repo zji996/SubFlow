@@ -27,19 +27,21 @@ def test_compact_global_context_defaults() -> None:
     assert ctx["glossary"] == {"a": "b"}
 
 
-def test_semantic_chunking_parse_result_translation_chunks_relative_ids() -> None:
+def test_semantic_chunking_clean_translation_strips_code_fences_and_quotes() -> None:
     stage = SemanticChunkingPass.__new__(SemanticChunkingPass)
-    window_segments = [
-        ASRSegment(id=10, start=0.0, end=1.0, text="a", language="en"),
-        ASRSegment(id=11, start=1.0, end=2.0, text="b", language="en"),
-    ]
-    result = {
-        "translation": "甲乙",
-        "asr_segment_ids": [0, 1],
-    }
-    chunk, next_cursor = stage._parse_result(result, window_start=10, window_segments=window_segments, chunk_id=0)
-    assert chunk is not None
-    assert chunk.asr_segment_ids == [10, 11]
-    assert next_cursor == 12
-    assert chunk.translation_chunks and chunk.translation_chunks[0].segment_id == 10
-    assert chunk.translation_chunks and chunk.translation_chunks[0].text == "甲"
+    assert stage._clean_translation("```text\nhi\n```") == "hi"
+    assert stage._clean_translation('"hi"') == "hi"
+    assert stage._clean_translation(" hi ") == "hi"
+
+
+def test_semantic_chunking_parse_batch_translation_parses_expected_ids() -> None:
+    out = SemanticChunkingPass._parse_batch_translation(
+        '```text\n[0]: hi\n[1]: "there"\n```',
+        expected_ids=[0, 1],
+    )
+    assert out == {0: "hi", 1: "there"}
+
+
+def test_semantic_chunking_parse_batch_translation_raises_on_missing_ids() -> None:
+    with pytest.raises(ValueError):
+        SemanticChunkingPass._parse_batch_translation("[0]: hi", expected_ids=[0, 1])

@@ -119,4 +119,3 @@ class SubtitleExportRepository(BaseRepository):
                 )
                 rows = await cur.fetchall()
         return [self._from_row(r) for r in rows]
-

@@ -71,6 +71,7 @@ class ASRMergedChunkRepository(BaseRepository):
     async def delete_by_project(self, project_id: str) -> None:
         async with self.connection() as conn:
             async with conn.cursor() as cur:
-                await cur.execute("DELETE FROM asr_merged_chunks WHERE project_id=%s", (str(project_id),))
+                await cur.execute(
+                    "DELETE FROM asr_merged_chunks WHERE project_id=%s", (str(project_id),)
+                )
             await conn.commit()
-

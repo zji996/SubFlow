@@ -3,7 +3,6 @@ import {
     getSubtitleEditData,
     type SubtitleEditComputedEntry,
     type SubtitleEditDataResponse,
-    type TranslationStyle,
 } from '../../api/subtitles'
 import { createExport } from '../../api/exports'
 import type { ExportFormat, ContentMode, PrimaryPosition } from '../../api/subtitles'
@@ -32,7 +31,6 @@ export function SubtitleEditor({ projectId, onClose }: SubtitleEditorProps) {
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState<string | null>(null)
     const [data, setData] = useState<SubtitleEditDataResponse | null>(null)
-    const [translationStyle, setTranslationStyle] = useState<TranslationStyle>('per_chunk')
     const [editedEntries, setEditedEntries] = useState<Map<number, EditedEntry>>(new Map())
     const [isSaving, setIsSaving] = useState(false)
     const [saveError, setSaveError] = useState<string | null>(null)
@@ -55,14 +53,7 @@ export function SubtitleEditor({ projectId, onClose }: SubtitleEditorProps) {
     }, [fetchData])
 
     const getPrimary = (entry: SubtitleEditComputedEntry): string => {
-        switch (translationStyle) {
-            case 'per_chunk':
-                return entry.primary_per_chunk
-            case 'full':
-                return entry.primary_full
-            default:
-                return entry.primary_per_chunk
-        }
+        return entry.primary
     }
 
     const handleEdit = (segmentId: number, field: 'secondary' | 'primary', value: string) => {
@@ -113,7 +104,6 @@ export function SubtitleEditor({ projectId, onClose }: SubtitleEditorProps) {
                 format,
                 content: 'both' as ContentMode,
                 primary_position: 'top' as PrimaryPosition,
-                translation_style: translationStyle,
                 edited_entries: entriesArray.length > 0 ? entriesArray : undefined,
             } as Parameters<typeof createExport>[1])
 
@@ -185,17 +175,7 @@ export function SubtitleEditor({ projectId, onClose }: SubtitleEditorProps) {
 
                 {/* Toolbar */}
                 <div className="flex items-center justify-between gap-4 px-6 py-3 border-b border-[--color-border] bg-[--color-bg-elevated]">
-                    <div className="flex items-center gap-4">
-                        <label className="text-sm text-[--color-text-muted]">翻译样式:</label>
-                        <select
-                            value={translationStyle}
-                            onChange={(e) => setTranslationStyle(e.target.value as TranslationStyle)}
-                            className="input py-1 px-3 text-sm"
-                        >
-                            <option value="per_chunk">标点均分</option>
-                            <option value="full">完整意译</option>
-                        </select>
-                    </div>
+                    <div />
                     <div className="flex items-center gap-2">
                         {editedEntries.size > 0 && (
                             <span className="text-xs text-[--color-text-muted]">

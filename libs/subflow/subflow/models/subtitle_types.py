@@ -30,25 +30,6 @@ class SubtitleContent(Enum):
     SECONDARY_ONLY = "secondary_only"
 
 
-class TranslationStyle(Enum):
-    """How to display translations for multi-segment chunks."""
-
-    FULL = "full"  # Each segment shows the full chunk translation
-    PER_CHUNK = "per_chunk"  # Each segment shows its assigned chunk translation
-
-    @classmethod
-    def parse(cls, value: str) -> TranslationStyle:
-        """Parse style with backward-compatible fallback.
-
-        `per_segment` was a legacy style; it is treated as `per_chunk`.
-        """
-
-        normalized = str(value or "").strip().lower()
-        if normalized == "per_segment":
-            normalized = cls.PER_CHUNK.value
-        return cls(normalized)
-
-
 @dataclass(frozen=True)
 class AssStyleConfig:
     primary_font: str = "思源黑体"
@@ -74,7 +55,4 @@ class SubtitleExportConfig:
     format: SubtitleFormat = SubtitleFormat.SRT
     content: SubtitleContent = SubtitleContent.BOTH
     primary_position: str = "top"  # "top" | "bottom"
-    translation_style: TranslationStyle = (
-        TranslationStyle.PER_CHUNK
-    )  # Default: distribute by translation_chunks
     ass_style: AssStyleConfig | None = None

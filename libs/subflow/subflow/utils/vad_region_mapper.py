@@ -48,4 +48,3 @@ def build_region_segment_ids(
 
     # Preserve original region order.
     return [out_by_region_id[i] for i in range(len(regions))]
-

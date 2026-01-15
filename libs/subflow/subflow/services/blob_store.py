@@ -153,7 +153,9 @@ class BlobStore:
             "src_hash": str(src_hash),
             "params": params or {},
         }
-        encoded = json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        encoded = json.dumps(
+            payload, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+        ).encode("utf-8")
         return hashlib.sha256(encoded).hexdigest()
 
     async def get_derived(
@@ -165,11 +167,15 @@ class BlobStore:
     ) -> str | None:
         try:
             await self._ensure_schema()
-            return await asyncio.to_thread(self._get_derived_sync, str(transform), str(src_hash), params or None)
+            return await asyncio.to_thread(
+                self._get_derived_sync, str(transform), str(src_hash), params or None
+            )
         except Exception:
             return None
 
-    def _get_derived_sync(self, transform: str, src_hash: str, params: dict[str, Any] | None) -> str | None:
+    def _get_derived_sync(
+        self, transform: str, src_hash: str, params: dict[str, Any] | None
+    ) -> str | None:
         import psycopg
 
         key = self._derived_key(transform=transform, src_hash=src_hash, params=params)
@@ -192,7 +198,9 @@ class BlobStore:
     ) -> None:
         try:
             await self._ensure_schema()
-            await asyncio.to_thread(self._set_derived_sync, str(transform), str(src_hash), str(dst_hash), params or None)
+            await asyncio.to_thread(
+                self._set_derived_sync, str(transform), str(src_hash), str(dst_hash), params or None
+            )
         except Exception:
             return None
 
@@ -269,7 +277,12 @@ class BlobStore:
             await self._cache_exists(str(ref.blob_hash))
             return ref
         except Exception as exc:
-            logger.warning("BlobStore ingest skipped (project_id=%s, file_type=%s): %s", project_id, file_type, exc)
+            logger.warning(
+                "BlobStore ingest skipped (project_id=%s, file_type=%s): %s",
+                project_id,
+                file_type,
+                exc,
+            )
             fallback = Path(local_path)
             blob_path = None
             try:
@@ -438,7 +451,9 @@ class BlobStore:
         """Delete blobs with ref_count=0 from disk and remove their DB rows."""
         try:
             await self._ensure_schema()
-            return int(await asyncio.to_thread(self._gc_unreferenced_sync, int(limit), bool(dry_run)))
+            return int(
+                await asyncio.to_thread(self._gc_unreferenced_sync, int(limit), bool(dry_run))
+            )
         except Exception as exc:
             logger.warning("BlobStore gc skipped: %s", exc)
             return 0

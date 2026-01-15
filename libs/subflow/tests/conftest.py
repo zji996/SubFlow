@@ -13,4 +13,3 @@ def settings(tmp_path) -> Settings:
         models_dir=str(tmp_path / "models"),
         log_dir=str(tmp_path / "logs"),
     )
-

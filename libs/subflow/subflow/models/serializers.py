@@ -84,7 +84,9 @@ def serialize_asr_corrected_segments(
     return out
 
 
-def deserialize_asr_corrected_segments(items: list[dict[str, Any]]) -> dict[int, ASRCorrectedSegment]:
+def deserialize_asr_corrected_segments(
+    items: list[dict[str, Any]],
+) -> dict[int, ASRCorrectedSegment]:
     out: dict[int, ASRCorrectedSegment] = {}
     for item in items:
         seg_id = int(item["id"])
@@ -160,7 +162,9 @@ def deserialize_semantic_chunks(items: list[dict[str, Any]]) -> list[SemanticChu
                 raw_segment_id = ch.get("segment_id")
                 if raw_segment_id is not None:
                     try:
-                        translation_chunks.append(TranslationChunk(text=text, segment_id=int(raw_segment_id)))
+                        translation_chunks.append(
+                            TranslationChunk(text=text, segment_id=int(raw_segment_id))
+                        )
                     except (TypeError, ValueError):
                         continue
                     continue

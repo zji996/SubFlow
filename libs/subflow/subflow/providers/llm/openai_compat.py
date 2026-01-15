@@ -9,7 +9,13 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 import httpx
-from tenacity import RetryCallState, retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+from tenacity import (
+    RetryCallState,
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 from subflow.error_codes import ErrorCode
 from subflow.exceptions import ProviderError
@@ -206,7 +212,9 @@ class OpenAICompatProvider(LLMProvider):
                     if isinstance(event, dict) and isinstance(event.get("error"), dict):
                         error_obj = event["error"]
                         error_msg = str(error_obj.get("message") or error_obj or "unknown error")
-                        raise ProviderError(self.provider, error_msg, error_code=ErrorCode.LLM_FAILED)
+                        raise ProviderError(
+                            self.provider, error_msg, error_code=ErrorCode.LLM_FAILED
+                        )
 
                     if not isinstance(event, dict):
                         continue

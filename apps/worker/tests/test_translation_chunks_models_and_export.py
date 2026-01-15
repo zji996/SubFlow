@@ -3,7 +3,6 @@ from __future__ import annotations
 from subflow.export.subtitle_exporter import SubtitleExporter
 from subflow.models.segment import ASRSegment, SemanticChunk, TranslationChunk
 from subflow.models.serializers import deserialize_semantic_chunks, serialize_semantic_chunks
-from subflow.models.subtitle_types import TranslationStyle
 
 
 def test_semantic_chunk_serialization_roundtrip_translation_chunks() -> None:
@@ -58,8 +57,7 @@ def test_subtitle_exporter_per_chunk_leaves_uncovered_primary_empty() -> None:
         chunks=chunks,
         asr_segments=asr_segments,
         asr_corrected_segments=None,
-        translation_style=TranslationStyle.PER_CHUNK,
     )
 
     assert entries[0].primary_text == "only0"
-    assert entries[1].primary_text == ""
+    assert entries[1].primary_text == "FULL"

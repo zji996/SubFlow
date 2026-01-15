@@ -35,7 +35,9 @@ def get_llm_provider(config: Mapping[str, Any]) -> LLMProvider:
     """Get LLM provider based on configuration."""
     provider_type = str(config.get("provider", "openai") or "").strip().lower() or "openai"
     if provider_type == "gemini":
-        raise ConfigurationError("Gemini provider has been removed (use: openai/openai_compat/anthropic/claude)")
+        raise ConfigurationError(
+            "Gemini provider has been removed (use: openai/openai_compat/anthropic/claude)"
+        )
 
     match provider_type:
         case "openai" | "openai_compat":

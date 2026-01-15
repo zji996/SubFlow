@@ -45,4 +45,3 @@ def test_distribute_translation_no_punctuation_cjk_even_split() -> None:
 def test_distribute_translation_no_punctuation_words_even_split() -> None:
     chunks = distribute_translation("one two three four", _segs([1.0, 1.0]))
     assert [c.text for c in chunks] == ["one two", "three four"]
-

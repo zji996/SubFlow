@@ -14,7 +14,9 @@ class AudioProvider(ABC):
     async def separate_vocals(self, audio_path: str, output_dir: str) -> str:
         raise NotImplementedError
 
-    async def normalize_audio(self, input_path: str, output_path: str, *, target_db: float = -1.0) -> str:
+    async def normalize_audio(
+        self, input_path: str, output_path: str, *, target_db: float = -1.0
+    ) -> str:
         raise NotImplementedError
 
     async def close(self) -> None:  # pragma: no cover

@@ -39,7 +39,6 @@ class ASRConfig(BaseSettings):
     model: str = "glm-asr"
     timeout: float = 300.0  # 单个请求超时（秒）
     ffmpeg_concurrency: int = Field(default=10, ge=1)
-    max_chunk_s: float = Field(default=15.0, gt=0)
 
 
 class LLMProfileConfig(BaseSettings):
@@ -62,6 +61,7 @@ class LLMLimitsConfig(BaseSettings):
     )
 
     max_asr_segments: int | None = None
+    translation_batch_size: int = Field(default=10, ge=1)
 
 
 class LLMFastConfig(LLMProfileConfig):
@@ -172,7 +172,8 @@ class VADConfig(BaseSettings):
     min_speech_duration_ms: int = 100
     threshold: float = 0.60
     # Split long regions at low-probability valleys (VAD-aware splitting).
-    target_max_segment_s: float | None = 4.0
+    # NOTE: disabled by default; Stage 3 now handles sentence-aligned splitting.
+    target_max_segment_s: float | None = None
     split_threshold: float | None = 0.45
     split_search_backtrack_ratio: float = 0.7
     split_search_forward_ratio: float = 0.03
@@ -183,6 +184,37 @@ class VADConfig(BaseSettings):
     @model_validator(mode="after")
     def _resolve_paths(self) -> "VADConfig":
         self.nemo_model_path = _resolve_repo_path(self.nemo_model_path)
+        return self
+
+
+class GreedySentenceASRConfig(BaseSettings):
+    """Greedy sentence-aligned ASR (Stage 3) configuration."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="GREEDY_SENTENCE_ASR_",
+        env_file=_ENV_FILES,
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    max_chunk_s: float = Field(default=10.0, gt=0)
+    fallback_chunk_s: float = Field(
+        default=15.0,
+        gt=0,
+        validation_alias=AliasChoices("fallback_chunk_s", "ASR_MAX_CHUNK_S"),
+    )
+    vad_search_range_s: float = Field(default=1.0, gt=0)
+    vad_valley_threshold: float = Field(default=0.3, ge=0, le=1)
+    parallel_gap_s: float = Field(default=2.0, ge=0)
+    sentence_endings: str = "。？！；?!;."
+    clause_endings: str = "，,、：:—–"
+
+    @model_validator(mode="after")
+    def _validate_windows(self) -> "GreedySentenceASRConfig":
+        if float(self.fallback_chunk_s) < float(self.max_chunk_s):
+            raise ConfigurationError(
+                "GREEDY_SENTENCE_ASR_FALLBACK_CHUNK_S must be >= GREEDY_SENTENCE_ASR_MAX_CHUNK_S"
+            )
         return self
 
 
@@ -208,7 +240,9 @@ class LoggingSettings(BaseSettings):
 class Settings(BaseSettings):
     """Application settings."""
 
-    model_config = SettingsConfigDict(env_file=_ENV_FILES, env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=_ENV_FILES, env_file_encoding="utf-8", extra="ignore"
+    )
 
     models_dir: str = "./models"
     data_dir: str = "./data"
@@ -264,6 +298,7 @@ class Settings(BaseSettings):
 
     # VAD
     vad: VADConfig = VADConfig()
+    greedy_sentence_asr: GreedySentenceASRConfig = GreedySentenceASRConfig()
 
     # Logging
     logging: LoggingSettings = LoggingSettings()

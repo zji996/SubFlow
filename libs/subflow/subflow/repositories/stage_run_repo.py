@@ -34,8 +34,12 @@ class StageRunRepository(BaseRepository):
             status=StageRunStatus(str(row.get("status") or StageRunStatus.PENDING.value)),
             started_at=started_at if isinstance(started_at, datetime) else None,
             completed_at=completed_at if isinstance(completed_at, datetime) else None,
-            duration_ms=int(metadata["duration_ms"]) if isinstance(metadata.get("duration_ms"), int) else None,
-            progress=int(metadata["progress"]) if isinstance(metadata.get("progress"), int) else None,
+            duration_ms=int(metadata["duration_ms"])
+            if isinstance(metadata.get("duration_ms"), int)
+            else None,
+            progress=int(metadata["progress"])
+            if isinstance(metadata.get("progress"), int)
+            else None,
             progress_message=str(metadata.get("progress_message") or "") or None,
             metrics=metrics,
             error_code=str(metadata.get("error_code") or "") or None,

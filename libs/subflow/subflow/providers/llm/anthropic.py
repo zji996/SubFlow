@@ -8,7 +8,13 @@ import time
 from typing import Any
 
 import anthropic
-from tenacity import RetryCallState, retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+from tenacity import (
+    RetryCallState,
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 from subflow.error_codes import ErrorCode
 from subflow.exceptions import ProviderError
@@ -99,13 +105,13 @@ class AnthropicProvider(LLMProvider):
         if not self.api_key:
             raise ValueError("AnthropicProvider requires api_key")
         self.model = str(model or "").strip() or "claude-sonnet-4-20250514"
-        
+
         # Handle base_url - SDK expects it without /v1 suffix
         resolved = str(base_url or "").strip().rstrip("/")
         if resolved.endswith("/v1"):
             resolved = resolved[:-3]
         self.base_url = resolved or None
-        
+
         # Create async client
         self._client = anthropic.AsyncAnthropic(
             api_key=self.api_key,
@@ -128,7 +134,7 @@ class AnthropicProvider(LLMProvider):
         max_tokens: int | None,
     ) -> tuple[str, LLMUsage | None, int]:
         system, non_system = _split_system_messages(messages)
-        
+
         started = time.perf_counter()
         text_chunks: list[str] = []
         usage_prompt: int | None = None
@@ -145,7 +151,7 @@ class AnthropicProvider(LLMProvider):
             ) as stream:
                 async for text in stream.text_stream:
                     text_chunks.append(text)
-                
+
                 # Get final message for usage info
                 final_message = await stream.get_final_message()
                 if final_message and final_message.usage:

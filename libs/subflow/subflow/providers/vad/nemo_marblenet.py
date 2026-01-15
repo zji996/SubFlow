@@ -9,9 +9,13 @@ This model is shipped as a NeMo `.nemo` checkpoint, so inference requires `nemo_
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from subflow.providers.vad.base import VADProvider
+
+if TYPE_CHECKING:  # pragma: no cover
+    import torch
+
 
 class NemoMarbleNetVADProvider(VADProvider):
     def __init__(
@@ -35,7 +39,9 @@ class NemoMarbleNetVADProvider(VADProvider):
         self.min_speech_s = max(0.0, float(min_speech_duration_ms) / 1000.0)
         self.frame_hop_s = max(0.001, float(frame_hop_s))
         self.device = device
-        self.target_max_segment_s = None if target_max_segment_s is None else float(target_max_segment_s)
+        self.target_max_segment_s = (
+            None if target_max_segment_s is None else float(target_max_segment_s)
+        )
         self.split_threshold = None if split_threshold is None else float(split_threshold)
         self.split_search_backtrack_ratio = float(split_search_backtrack_ratio)
         self.split_search_forward_ratio = float(split_search_forward_ratio)
@@ -91,8 +97,7 @@ class NemoMarbleNetVADProvider(VADProvider):
         merged.append((cur_s, cur_e))
         return merged
 
-    def _postprocess(self, probs: Any, duration_s: float) -> list[tuple[float, float]]:
-        # probs: 1D torch.Tensor or list[float]
+    def _to_probs_tensor(self, probs: Any) -> "torch.Tensor":
         import torch
 
         t = probs
@@ -106,6 +111,11 @@ class NemoMarbleNetVADProvider(VADProvider):
             max_v = float(t.max().item())
             if min_v < 0.0 or max_v > 1.0:
                 t = torch.sigmoid(t)
+
+        return t
+
+    def _postprocess(self, probs: Any, duration_s: float) -> list[tuple[float, float]]:
+        t = self._to_probs_tensor(probs)
 
         active = t >= float(self.threshold)
         idx = active.nonzero(as_tuple=False).flatten().tolist()
@@ -151,7 +161,9 @@ class NemoMarbleNetVADProvider(VADProvider):
                 continue
 
             start_frame = max(0, int(seg_start / self.frame_hop_s))
-            end_frame = min(int(duration_s / self.frame_hop_s) + 1, int(seg_end / self.frame_hop_s) + 1)
+            end_frame = min(
+                int(duration_s / self.frame_hop_s) + 1, int(seg_end / self.frame_hop_s) + 1
+            )
             cursor_s = seg_start
 
             while seg_end - cursor_s > max_len_s:
@@ -268,3 +280,53 @@ class NemoMarbleNetVADProvider(VADProvider):
 
         duration_s = float(input_signal.shape[1]) / 16000.0
         return self._postprocess(logits, duration_s)
+
+    def detect_with_probs(
+        self, audio_path: str
+    ) -> tuple[list[tuple[float, float]], "torch.Tensor"]:
+        """Run VAD and also return frame-level speech probabilities.
+
+        Returns:
+            (segments, frame_probs) where:
+              - segments: the same segments as `detect()` would return
+              - frame_probs: 1D CPU float tensor in [0, 1], with hop=`self.frame_hop_s`
+        """
+        self._ensure_loaded()
+        assert self._model is not None
+
+        import torch
+        import torchaudio
+
+        wav, sr = torchaudio.load(str(audio_path))
+        if wav.numel() == 0:
+            return ([], torch.empty((0,), dtype=torch.float32))
+        if sr != 16000:
+            wav = torchaudio.functional.resample(wav, sr, 16000)
+        if wav.shape[0] > 1:
+            wav = wav.mean(dim=0, keepdim=True)
+
+        input_signal = wav.to(dtype=torch.float32)
+        input_signal_length = torch.tensor([input_signal.shape[1]], dtype=torch.long)
+        device = next(self._model.parameters()).device
+        with torch.no_grad():
+            out = self._model(
+                input_signal=input_signal.to(device),
+                input_signal_length=input_signal_length.to(device),
+            )
+
+        if isinstance(out, torch.Tensor):
+            logits = out
+        else:
+            logits = torch.as_tensor(out)
+        if logits.dim() == 3:
+            if logits.shape[-1] >= 2:
+                logits = logits[..., 1]
+            else:
+                logits = logits.squeeze(-1)
+        if logits.dim() == 2:
+            logits = logits[0]
+
+        duration_s = float(input_signal.shape[1]) / 16000.0
+        segments = self._postprocess(logits, duration_s)
+        frame_probs = self._to_probs_tensor(logits)
+        return (segments, frame_probs)

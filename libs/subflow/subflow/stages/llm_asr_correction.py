@@ -78,7 +78,9 @@ class LLMASRCorrectionStage(BaseLLMStage):
         asr_by_id: dict[int, ASRSegment] = {int(seg.id): seg for seg in asr_segments}
         corrected: dict[int, ASRCorrectedSegment] = {}
         concurrency = max(1, int(self.get_concurrency_limit(self.settings)))
-        service: ServiceType = "llm_power" if str(self.profile or "").strip().lower() == "power" else "llm_fast"
+        service: ServiceType = (
+            "llm_power" if str(self.profile or "").strip().lower() == "power" else "llm_fast"
+        )
         tracker = get_concurrency_tracker(self.settings)
         started_at = time.monotonic()
         llm_prompt_tokens = 0
@@ -168,7 +170,9 @@ class LLMASRCorrectionStage(BaseLLMStage):
                 await progress_reporter.report(0, f"纠错中 0/{total_chunks} 区域")
 
         done_chunks = 0
-        parallel_enabled = bool(getattr(self.settings, "parallel", None) and self.settings.parallel.enabled)
+        parallel_enabled = bool(
+            getattr(self.settings, "parallel", None) and self.settings.parallel.enabled
+        )
         if not parallel_enabled:
             tasks = [asyncio.create_task(_process_chunk(c)) for c in merged_chunks]
         else:
@@ -252,13 +256,17 @@ class LLMASRCorrectionStage(BaseLLMStage):
         for seg in asr_segments:
             existing = corrected.get(seg.id)
             if existing is None:
-                corrected[seg.id] = ASRCorrectedSegment(id=seg.id, asr_segment_id=seg.id, text=seg.text)
+                corrected[seg.id] = ASRCorrectedSegment(
+                    id=seg.id, asr_segment_id=seg.id, text=seg.text
+                )
             elif not existing.text:
                 existing.text = seg.text
 
         context["asr_segments"] = asr_segments
         context["asr_segments_index"] = {seg.id: seg for seg in asr_segments}
         context["asr_corrected_segments"] = corrected
-        context["full_transcript"] = " ".join(seg.text for seg in asr_segments if (seg.text or "").strip())
+        context["full_transcript"] = " ".join(
+            seg.text for seg in asr_segments if (seg.text or "").strip()
+        )
         logger.info("llm_asr_correction done (corrected_segments=%d)", len(corrected))
         return context

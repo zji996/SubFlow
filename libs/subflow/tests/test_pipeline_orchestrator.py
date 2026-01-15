@@ -89,7 +89,9 @@ class _InMemoryStageRunRepo:
     async def mark_completed(self, project_id: str, stage: str, metadata=None):  # noqa: ANN001, ARG002
         return None
 
-    async def mark_failed(self, project_id: str, stage: str, error_code: str, error_message: str, *, metadata=None):  # noqa: ANN001, ARG002
+    async def mark_failed(
+        self, project_id: str, stage: str, error_code: str, error_message: str, *, metadata=None
+    ):  # noqa: ANN001, ARG002
         return None
 
 
@@ -213,7 +215,16 @@ async def test_orchestrator_runs_and_marks_completed(settings, monkeypatch) -> N
         on_project_update=on_update,
     )
 
-    fake_runners = {s: _Runner(stage=s, progress_steps=[10, 100]) for s in [StageName.AUDIO_PREPROCESS, StageName.VAD, StageName.ASR, StageName.LLM_ASR_CORRECTION, StageName.LLM]}
+    fake_runners = {
+        s: _Runner(stage=s, progress_steps=[10, 100])
+        for s in [
+            StageName.AUDIO_PREPROCESS,
+            StageName.VAD,
+            StageName.ASR,
+            StageName.LLM_ASR_CORRECTION,
+            StageName.LLM,
+        ]
+    }
     monkeypatch.setattr("subflow.pipeline.orchestrator.RUNNERS", fake_runners, raising=False)
 
     out_project, ctx = await orch.run_stage(project, StageName.ASR)

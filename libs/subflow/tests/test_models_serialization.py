@@ -70,4 +70,3 @@ def test_project_roundtrip_includes_exports() -> None:
     assert len(restored.exports) == 1
     assert restored.exports[0].id == "export_1"
     assert restored.exports[0].format == SubtitleFormat.SRT
-

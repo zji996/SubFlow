@@ -8,12 +8,17 @@ from subflow.export.formatters.ass import ASSFormatter
 from subflow.export.formatters.json_format import JSONFormatter
 from subflow.export.formatters.srt import SRTFormatter
 from subflow.export.formatters.vtt import VTTFormatter
-from subflow.models.segment import ASRCorrectedSegment, ASRSegment, SemanticChunk
+from subflow.models.segment import (
+    ASRCorrectedSegment,
+    ASRSegment,
+    SegmentTranslation,
+    SemanticChunk,
+    TranslationChunk,
+)
 from subflow.models.subtitle_types import (
     SubtitleEntry,
     SubtitleExportConfig,
     SubtitleFormat,
-    TranslationStyle,
 )
 
 
@@ -41,42 +46,47 @@ class SubtitleExporter:
         chunks: list[SemanticChunk],
         asr_segments: list[ASRSegment],
         asr_corrected_segments: dict[int, ASRCorrectedSegment] | None,
-        translation_style: TranslationStyle = TranslationStyle.PER_CHUNK,
+        segment_translations: list[SegmentTranslation] | None = None,
     ) -> list[SubtitleEntry]:
         corrected_index: dict[int, ASRCorrectedSegment] = dict(asr_corrected_segments or {})
 
-        ordered_segments = sorted(asr_segments, key=lambda s: (float(s.start), float(s.end), int(s.id)))
+        ordered_segments = sorted(
+            asr_segments, key=lambda s: (float(s.start), float(s.end), int(s.id))
+        )
 
-        # Build segment_id -> chunk mapping
-        chunk_by_segment_id: dict[int, SemanticChunk] = {}
-        for semantic_chunk in chunks:
-            for seg_id in list(semantic_chunk.asr_segment_ids or []):
-                if seg_id not in chunk_by_segment_id:
-                    chunk_by_segment_id[int(seg_id)] = semantic_chunk
+        translation_by_segment_id: dict[int, str] = {}
 
-        # Build segment_id -> per-chunk translation mapping
-        per_chunk_translation: dict[int, str] = {}
-        for semantic_chunk in chunks:
-            for ch in list(semantic_chunk.translation_chunks or []):
-                seg_id = int(ch.segment_id)
-                if seg_id not in per_chunk_translation:
-                    per_chunk_translation[seg_id] = str(ch.text or "")
+        # Preferred: direct 1:1 translations from Stage 5.
+        if segment_translations:
+            for tr in list(segment_translations or []):
+                sid = int(tr.segment_id)
+                if sid not in translation_by_segment_id:
+                    translation_by_segment_id[sid] = str(tr.translation or "")
+
+        # Backward compatibility: derive per-segment translation from legacy semantic_chunks.
+        if not translation_by_segment_id:
+            for semantic_chunk in list(chunks or []):
+                for ch in list(semantic_chunk.translation_chunks or []):
+                    if not isinstance(ch, TranslationChunk):
+                        continue
+                    seg_id = int(ch.segment_id)
+                    if seg_id not in translation_by_segment_id:
+                        translation_by_segment_id[seg_id] = str(ch.text or "")
+            for semantic_chunk in list(chunks or []):
+                chunk_text = str(semantic_chunk.translation or "")
+                if not chunk_text:
+                    continue
+                for seg_id in list(semantic_chunk.asr_segment_ids or []):
+                    sid = int(seg_id)
+                    if sid not in translation_by_segment_id:
+                        translation_by_segment_id[sid] = chunk_text
 
         items: list[tuple[float, float, int, SubtitleEntry]] = []
         seq = 0
 
         for seg in ordered_segments:
             corrected = corrected_index.get(seg.id)
-            chunk_for_seg = chunk_by_segment_id.get(seg.id)
-
-            # Determine primary text based on translation_style
-            match translation_style:
-                case TranslationStyle.PER_CHUNK:
-                    primary = per_chunk_translation.get(seg.id, "")
-                case TranslationStyle.FULL:
-                    primary = (chunk_for_seg.translation if chunk_for_seg is not None else "") or ""
-
-            primary = primary.strip()
+            primary = str(translation_by_segment_id.get(int(seg.id), "") or "").strip()
             secondary = ((corrected.text if corrected is not None else "") or "").strip() or (
                 (seg.text or "").strip()
             )
@@ -106,11 +116,13 @@ class SubtitleExporter:
         asr_segments: list[ASRSegment],
         asr_corrected_segments: dict[int, ASRCorrectedSegment] | None,
         config: SubtitleExportConfig,
+        *,
+        segment_translations: list[SegmentTranslation] | None = None,
     ) -> str:
         entries = self.build_entries(
             chunks=chunks,
             asr_segments=asr_segments,
             asr_corrected_segments=asr_corrected_segments,
-            translation_style=config.translation_style,
+            segment_translations=segment_translations,
         )
         return self.export_entries(entries, config)
