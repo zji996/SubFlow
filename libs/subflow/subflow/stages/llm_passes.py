@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import re
 import time
 from typing import Any, cast
 
@@ -20,6 +19,7 @@ from subflow.pipeline.concurrency import ServiceType, get_concurrency_tracker
 from subflow.pipeline.context import MetricsProgressReporter, PipelineContext, ProgressReporter
 from subflow.providers.llm import Message
 from subflow.stages.base_llm import BaseLLMStage
+from subflow.utils.llm_json_parser import parse_id_text_array
 from subflow.utils.tokenizer import count_tokens, truncate_to_tokens
 
 logger = logging.getLogger(__name__)
@@ -178,36 +178,51 @@ class SemanticChunkingPass(BaseLLMStage):
             "## 规则\n"
             "1. 意译优先：翻译要通顺自然，传达意思而非逐字翻译\n"
             "2. 适合字幕：简洁明了，适合阅读\n"
-            "3. 保持顺序：按输入顺序输出翻译\n\n"
+            "3. 保持顺序：按输入顺序输出翻译，id 与输入一一对应\n"
+            "4. 独立可读：每段字幕应能独立理解，相邻段落可能是同一句话被错误断开\n"
+            "   - 翻译时适当补充上下文，让每段都有完整语义\n"
+            '   - 例如 {"id": 5, "text": "So if you haven\'t"} 和 '
+            '{"id": 6, "text": "Seen my channel before,"}\n'
+            '   - 应翻译为：id=5 → "如果你还没看过" / id=6 → "还没看过我频道的话，"\n'
+            '   - 而不是：id=5 → "如果你还没" / id=6 → "看过我的频道，"\n\n'
             "## 输入格式\n"
-            '每行一个句子，格式为 "[id]: 句子内容"\n\n'
+            "JSON 数组，每个元素包含 id 和 text：\n"
+            "[\n"
+            '  {"id": 0, "text": "句子内容"},\n'
+            '  {"id": 1, "text": "句子内容"}\n'
+            "]\n\n"
             "## 输出格式\n"
-            '每行一个翻译，格式为 "[id]: 翻译内容"\n'
-            "只输出这些行，不要其他内容。"
+            "JSON 数组，每个元素包含 id 和 text（翻译结果）：\n"
+            "[\n"
+            '  {"id": 0, "text": "翻译内容"},\n'
+            '  {"id": 1, "text": "翻译内容"}\n'
+            "]\n\n"
+            "只输出 JSON 数组，不要其他内容。"
         )
 
     @staticmethod
-    def _group_segments_by_sentence(
+    def _build_translation_batches(
         segments: list[ASRSegment],
         *,
         get_text: Any,
+        max_segments_per_batch: int,
         sentence_endings: str,
     ) -> list[list[ASRSegment]]:
         endings = set(str(sentence_endings or ""))
-        groups: list[list[ASRSegment]] = []
+        batches: list[list[ASRSegment]] = []
         current: list[ASRSegment] = []
         for seg in list(segments or []):
             txt = str(get_text(seg) or "").rstrip()
             if not txt:
                 continue
             current.append(seg)
-            last = txt[-1:]
-            if last and last in endings:
-                groups.append(current)
+            is_sentence_end = bool(txt) and txt[-1] in endings
+            if len(current) >= max_segments_per_batch and is_sentence_end:
+                batches.append(current)
                 current = []
         if current:
-            groups.append(current)
-        return groups
+            batches.append(current)
+        return batches
 
     def _build_batch_user_input(
         self,
@@ -220,58 +235,9 @@ class SemanticChunkingPass(BaseLLMStage):
         compact_context = _compact_global_context(global_context)
         if compact_context:
             parts.append(f"全局上下文：\n{json.dumps(compact_context, ensure_ascii=False)}")
-        lines: list[str] = []
-        for seg_id, text in items:
-            lines.append(f"[{int(seg_id)}]: {str(text or '').strip()}")
-        parts.append("待翻译：\n" + "\n".join(lines).strip())
+        payload = [{"id": int(seg_id), "text": str(text or "").strip()} for seg_id, text in items]
+        parts.append("待翻译：\n" + json.dumps(payload, ensure_ascii=False))
         return "\n\n".join(parts).strip()
-
-    @classmethod
-    def _parse_batch_translation(cls, raw_text: str, *, expected_ids: list[int]) -> dict[int, str]:
-        text = str(raw_text or "").strip()
-        if not text:
-            raise ValueError("Empty LLM output")
-
-        cleaned: list[str] = []
-        for line in text.splitlines():
-            if line.strip().startswith("```"):
-                continue
-            stripped = line.strip()
-            if stripped:
-                cleaned.append(stripped)
-
-        pattern = re.compile(r"^\[(\d+)\]\s*:\s*(.*)$")
-        out: dict[int, str] = {}
-        for line in cleaned:
-            m = pattern.match(line)
-            if not m:
-                continue
-            seg_id = int(m.group(1))
-            if seg_id not in out:
-                out[seg_id] = cls._clean_translation(m.group(2))
-
-        if not out:
-            sample = "\n".join(cleaned[:5]).strip()
-            raise ValueError(f"Unable to parse any [id]: lines from LLM output. Sample:\n{sample}")
-
-        missing = [int(i) for i in expected_ids if int(i) not in out]
-        if missing:
-            sample = "\n".join(cleaned[:10]).strip()
-            raise ValueError(f"Missing translations for ids={missing}. Sample:\n{sample}")
-
-        return out
-
-    @staticmethod
-    def _clean_translation(text: str) -> str:
-        s = str(text or "").strip()
-        if not s:
-            return ""
-        if s.startswith("```"):
-            parts = [line for line in s.splitlines() if not line.strip().startswith("```")]
-            s = "\n".join(parts).strip()
-        if (s.startswith('"') and s.endswith('"')) or (s.startswith("'") and s.endswith("'")):
-            s = s[1:-1].strip()
-        return s.strip()
 
     async def execute(
         self,
@@ -355,36 +321,14 @@ class SemanticChunkingPass(BaseLLMStage):
         translations: list[SegmentTranslation] = []
         chunks: list[SemanticChunk] = []
 
-        sentence_groups = self._group_segments_by_sentence(
+        batches = self._build_translation_batches(
             translatable,
             get_text=_src_text,
+            max_segments_per_batch=batch_size,
             sentence_endings=str(
                 getattr(self.settings.greedy_sentence_asr, "sentence_endings", "。？！；?!;.") or ""
             ),
         )
-
-        batches: list[list[ASRSegment]] = []
-        current_batch: list[ASRSegment] = []
-        for group in sentence_groups:
-            if not current_batch:
-                if len(group) > batch_size:
-                    for i in range(0, len(group), batch_size):
-                        batches.append(list(group[i : i + batch_size]))
-                    continue
-                current_batch = list(group)
-                continue
-            if len(current_batch) + len(group) <= batch_size:
-                current_batch.extend(group)
-            else:
-                batches.append(current_batch)
-                if len(group) > batch_size:
-                    for i in range(0, len(group), batch_size):
-                        batches.append(list(group[i : i + batch_size]))
-                    current_batch = []
-                else:
-                    current_batch = list(group)
-        if current_batch:
-            batches.append(current_batch)
 
         done = 0
         done_lock = asyncio.Lock()
@@ -449,7 +393,7 @@ class SemanticChunkingPass(BaseLLMStage):
 
             raw_out = getattr(result, "text", "") or ""
             try:
-                mapping = self._parse_batch_translation(str(raw_out), expected_ids=expected_ids)
+                mapping = parse_id_text_array(str(raw_out), expected_ids=expected_ids)
             except ValueError as exc:
                 raise StageExecutionError(
                     self.name,

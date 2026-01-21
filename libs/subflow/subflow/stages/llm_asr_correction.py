@@ -95,8 +95,6 @@ class LLMASRCorrectionStage(BaseLLMStage):
         )
         system_prompt = self._get_system_prompt()
 
-        semaphore = asyncio.Semaphore(concurrency)
-
         async def _complete_json(messages: list[Message]) -> tuple[Any, object | None]:
             helper = self.json_helper
             complete_with_usage = getattr(helper, "complete_json_with_usage", None)
@@ -119,14 +117,13 @@ class LLMASRCorrectionStage(BaseLLMStage):
                 return {}, None
 
             user_input = self._build_user_input(merged_text=chunk.text, segmented=seg_payload)
-            async with semaphore:
-                async with tracker.acquire(service):
-                    result, usage = await _complete_json(
-                        [
-                            Message(role="system", content=system_prompt),
-                            Message(role="user", content=user_input),
-                        ]
-                    )
+            async with tracker.acquire(service):
+                result, usage = await _complete_json(
+                    [
+                        Message(role="system", content=system_prompt),
+                        Message(role="user", content=user_input),
+                    ]
+                )
 
             if not isinstance(result, list):
                 raise StageExecutionError(self.name, "ASR correction output must be a JSON array")

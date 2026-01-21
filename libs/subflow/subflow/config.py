@@ -61,7 +61,9 @@ class LLMLimitsConfig(BaseSettings):
     )
 
     max_asr_segments: int | None = None
-    translation_batch_size: int = Field(default=10, ge=1)
+    translation_batch_size: int = Field(
+        default=10, ge=1, description="Soft limit per batch; extends to sentence endings."
+    )
 
 
 class LLMFastConfig(LLMProfileConfig):
@@ -323,11 +325,6 @@ class Settings(BaseSettings):
     @property
     def concurrency_asr(self) -> int:
         return int(self.concurrency.asr)
-
-    @property
-    def concurrency_llm_correction(self) -> int:
-        # Deprecated alias: Stage 4 used to rely on this name.
-        return int(self.concurrency.llm_fast)
 
     @property
     def database_url(self) -> str:

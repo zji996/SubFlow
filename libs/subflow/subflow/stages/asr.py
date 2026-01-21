@@ -68,7 +68,6 @@ class ASRStage(Stage):
             context.get("vad_regions") or context.get("vad_segments") or []
         )
         source_language = context.get("source_language") or None
-        max_concurrent = max(1, int(self.settings.concurrency_asr))
         tracker = get_concurrency_tracker(self.settings)
 
         if not vad_regions:
@@ -162,27 +161,22 @@ class ASRStage(Stage):
                     float(self.settings.greedy_sentence_asr.parallel_gap_s),
                 )
 
-                group_semaphore = asyncio.Semaphore(max(1, int(self.settings.concurrency_asr)))
-
                 async def _process_partition(
                     region_ids: list[int],
                 ) -> list[tuple[int, float, float]]:
-                    async with group_semaphore:
-                        out: list[tuple[int, float, float]] = []
-                        for region_id in region_ids:
-                            region = vad_regions[region_id]
-                            segs = await greedy_sentence_align_region(
-                                _transcribe_window,
-                                frame_probs=vad_frame_probs,
-                                frame_hop_s=float(frame_hop_s),
-                                region_start=float(region.start),
-                                region_end=float(region.end),
-                                config=greedy_cfg,
-                            )
-                            out.extend(
-                                [(int(region_id), float(s.start), float(s.end)) for s in segs]
-                            )
-                        return out
+                    out: list[tuple[int, float, float]] = []
+                    for region_id in region_ids:
+                        region = vad_regions[region_id]
+                        segs = await greedy_sentence_align_region(
+                            _transcribe_window,
+                            frame_probs=vad_frame_probs,
+                            frame_hop_s=float(frame_hop_s),
+                            region_start=float(region.start),
+                            region_end=float(region.end),
+                            config=greedy_cfg,
+                        )
+                        out.extend([(int(region_id), float(s.start), float(s.end)) for s in segs])
+                    return out
 
                 tasks = [_process_partition(p.region_ids()) for p in partitions]
                 grouped = await asyncio.gather(*tasks)
@@ -248,17 +242,14 @@ class ASRStage(Stage):
             )
 
             # 2. Transcribe all segments concurrently
-            semaphore = asyncio.Semaphore(max_concurrent)
-
             async def _transcribe_one(path: str) -> str:
-                async with semaphore:
-                    async with tracker.acquire("asr"):
-                        try:
-                            segs = await self.provider.transcribe(path, language=source_language)
-                            return segs[0].text if segs else ""
-                        except Exception as exc:
-                            logger.warning("asr error for %s: %s", path, exc)
-                            return ""
+                async with tracker.acquire("asr"):
+                    try:
+                        segs = await self.provider.transcribe(path, language=source_language)
+                        return segs[0].text if segs else ""
+                    except Exception as exc:
+                        logger.warning("asr error for %s: %s", path, exc)
+                        return ""
 
             texts: list[str] = [""] * len(segment_paths)
 

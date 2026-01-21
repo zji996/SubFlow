@@ -22,11 +22,21 @@ class ConcurrencyTracker:
         self._lock = asyncio.Lock()
         self._active: dict[ServiceType, int] = {k: 0 for k in maxima}
         self._max: dict[ServiceType, int] = {k: max(1, int(v)) for k, v in maxima.items()}
+        self._semaphores: dict[ServiceType, asyncio.Semaphore] = {
+            k: asyncio.Semaphore(max(1, int(v))) for k, v in maxima.items()
+        }
 
     def update_maxima(self, maxima: dict[ServiceType, int]) -> None:
         for key, value in maxima.items():
-            self._max[key] = max(1, int(value))
+            normalized = max(1, int(value))
+            previous_max = int(self._max.get(key, 1))
+            self._max[key] = normalized
             self._active.setdefault(key, 0)
+            if key not in self._semaphores or previous_max != normalized:
+                self._semaphores[key] = asyncio.Semaphore(normalized)
+
+    def get_semaphore(self, service: ServiceType) -> asyncio.Semaphore:
+        return self._semaphores[service]
 
     async def snapshot(self, service: ServiceType) -> ConcurrencyState:
         async with self._lock:
@@ -36,17 +46,19 @@ class ConcurrencyTracker:
 
     @asynccontextmanager
     async def acquire(self, service: ServiceType) -> AsyncIterator[ConcurrencyState]:
-        async with self._lock:
-            self._active[service] = int(self._active.get(service, 0)) + 1
-            state = ConcurrencyState(
-                active=int(self._active[service]), max=int(self._max.get(service, 1))
-            )
-        try:
-            yield state
-        finally:
+        sem = self._semaphores[service]
+        async with sem:
             async with self._lock:
-                current = int(self._active.get(service, 0)) - 1
-                self._active[service] = max(0, current)
+                self._active[service] = int(self._active.get(service, 0)) + 1
+                state = ConcurrencyState(
+                    active=int(self._active[service]), max=int(self._max.get(service, 1))
+                )
+            try:
+                yield state
+            finally:
+                async with self._lock:
+                    current = int(self._active.get(service, 0)) - 1
+                    self._active[service] = max(0, current)
 
 
 _TRACKER: ConcurrencyTracker | None = None

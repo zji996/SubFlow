@@ -1,11 +1,17 @@
 from __future__ import annotations
 
-from subflow.config import Settings
-from subflow.stages.llm_passes import SemanticChunkingPass
+from subflow.utils.llm_json_parser import parse_id_text_array
 
 
-def test_semantic_chunking_clean_translation_strips_wrappers() -> None:
-    stage = SemanticChunkingPass(Settings())
-    assert stage._clean_translation("```text\nhi\n```") == "hi"
-    assert stage._clean_translation('"hi"') == "hi"
-    assert stage._clean_translation(" hi ") == "hi"
+def test_parse_id_text_array_strips_markdown_fences() -> None:
+    """Verify that parse_id_text_array handles markdown code fences."""
+    raw = '```json\n[{"id": 0, "text": "hi"}]\n```'
+    out = parse_id_text_array(raw, expected_ids=[0])
+    assert out == {0: "hi"}
+
+
+def test_parse_id_text_array_strips_whitespace() -> None:
+    """Verify that text values are stripped."""
+    raw = '[{"id": 0, "text": "  hi  "}]'
+    out = parse_id_text_array(raw, expected_ids=[0])
+    assert out == {0: "hi"}
