@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import cast
 
 from subflow.config import Settings
+from subflow.exceptions import StageExecutionError
 from subflow.models.segment import ASRMergedChunk, ASRSegment, SentenceSegment, VADSegment
 from subflow.pipeline.concurrency import get_concurrency_tracker
 from subflow.pipeline.context import MetricsProgressReporter, PipelineContext, ProgressReporter
@@ -80,6 +81,11 @@ class ASRStage(Stage):
 
         vad_frame_probs = context.get("vad_frame_probs")
         frame_hop_s = float(context.get("vad_frame_hop_s") or 0.0)
+        if vad_frame_probs is None or frame_hop_s <= 0:
+            raise StageExecutionError(
+                self.name,
+                "Missing vad_frame_probs/vad_frame_hop_s; run VAD stage before ASR stage",
+            )
         greedy_cfg = GreedySentenceAlignerConfig(
             max_chunk_s=float(self.settings.greedy_sentence_asr.max_chunk_s),
             fallback_chunk_s=float(self.settings.greedy_sentence_asr.fallback_chunk_s),
@@ -104,95 +110,79 @@ class ASRStage(Stage):
 
             sentence_segments: list[SentenceSegment] = []
             sentence_vad_segments: list[VADSegment] = []
-            if vad_frame_probs is None or frame_hop_s <= 0:
-                # Backward compatibility: no frame-probs available => treat regions as segments.
-                logger.warning("asr fallback (missing vad_frame_probs/vad_frame_hop_s)")
-                for i, region in enumerate(vad_regions):
-                    sentence_segments.append(
-                        SentenceSegment(
-                            id=int(i),
-                            start=float(region.start),
-                            end=float(region.end),
-                            region_id=region.region_id,
-                        )
-                    )
-                    sentence_vad_segments.append(
-                        VADSegment(start=float(region.start), end=float(region.end))
-                    )
-            else:
-                window_index = count(1)
-                greedy_ffmpeg_semaphore = asyncio.Semaphore(
-                    max(1, int(self.settings.asr.ffmpeg_concurrency))
-                )
+            window_index = count(1)
+            greedy_ffmpeg_semaphore = asyncio.Semaphore(
+                max(1, int(self.settings.asr.ffmpeg_concurrency))
+            )
 
-                async def _transcribe_window(start: float, end: float) -> str:
-                    window_id = next(window_index)
-                    tmp_path = greedy_dir / f"window_{window_id:06d}_{start:.2f}_{end:.2f}.wav"
-                    async with greedy_ffmpeg_semaphore:
-                        await cut_audio_segment(
-                            input_path=vocals_path,
-                            output_path=str(tmp_path),
-                            start=float(start),
-                            end=float(end),
-                            ffmpeg_bin=self.settings.audio.ffmpeg_bin,
-                        )
+            async def _transcribe_window(start: float, end: float) -> str:
+                window_id = next(window_index)
+                tmp_path = greedy_dir / f"window_{window_id:06d}_{start:.2f}_{end:.2f}.wav"
+                async with greedy_ffmpeg_semaphore:
+                    await cut_audio_segment(
+                        input_path=vocals_path,
+                        output_path=str(tmp_path),
+                        start=float(start),
+                        end=float(end),
+                        ffmpeg_bin=self.settings.audio.ffmpeg_bin,
+                    )
+                try:
+                    async with tracker.acquire("asr"):
+                        return str(
+                            await self.provider.transcribe_segment(
+                                str(tmp_path), float(start), float(end)
+                            )
+                            or ""
+                        ).strip()
+                finally:
                     try:
-                        async with tracker.acquire("asr"):
-                            return str(
-                                await self.provider.transcribe_segment(
-                                    str(tmp_path), float(start), float(end)
-                                )
-                                or ""
-                            ).strip()
-                    finally:
-                        try:
-                            tmp_path.unlink(missing_ok=True)  # py311+
-                        except Exception:
-                            pass
+                        tmp_path.unlink(missing_ok=True)  # py311+
+                    except Exception:
+                        pass
 
-                partitions = partition_vad_regions_by_gap(
-                    vad_regions,
-                    min_gap_seconds=float(self.settings.greedy_sentence_asr.parallel_gap_s),
-                )
-                logger.info(
-                    "asr greedy align (regions=%d, partitions=%d, partition_gap_s=%.2f)",
-                    len(vad_regions),
-                    len(partitions),
-                    float(self.settings.greedy_sentence_asr.parallel_gap_s),
-                )
+            partitions = partition_vad_regions_by_gap(
+                vad_regions,
+                min_gap_seconds=float(self.settings.greedy_sentence_asr.parallel_gap_s),
+            )
+            logger.info(
+                "asr greedy align (regions=%d, partitions=%d, partition_gap_s=%.2f)",
+                len(vad_regions),
+                len(partitions),
+                float(self.settings.greedy_sentence_asr.parallel_gap_s),
+            )
 
-                async def _process_partition(
-                    region_ids: list[int],
-                ) -> list[tuple[int, float, float]]:
-                    out: list[tuple[int, float, float]] = []
-                    for region_id in region_ids:
-                        region = vad_regions[region_id]
-                        segs = await greedy_sentence_align_region(
-                            _transcribe_window,
-                            frame_probs=vad_frame_probs,
-                            frame_hop_s=float(frame_hop_s),
-                            region_start=float(region.start),
-                            region_end=float(region.end),
-                            config=greedy_cfg,
-                        )
-                        out.extend([(int(region_id), float(s.start), float(s.end)) for s in segs])
-                    return out
-
-                tasks = [_process_partition(p.region_ids()) for p in partitions]
-                grouped = await asyncio.gather(*tasks)
-                flat = [x for group in grouped for x in group]
-                flat.sort(key=lambda t: (t[1], t[2]))
-
-                for seg_id, (region_id, start, end_) in enumerate(flat):
-                    sentence_segments.append(
-                        SentenceSegment(
-                            id=int(seg_id),
-                            start=float(start),
-                            end=float(end_),
-                            region_id=int(region_id),
-                        )
+            async def _process_partition(
+                region_ids: list[int],
+            ) -> list[tuple[int, float, float]]:
+                out: list[tuple[int, float, float]] = []
+                for region_id in region_ids:
+                    region = vad_regions[region_id]
+                    segs = await greedy_sentence_align_region(
+                        _transcribe_window,
+                        frame_probs=vad_frame_probs,
+                        frame_hop_s=float(frame_hop_s),
+                        region_start=float(region.start),
+                        region_end=float(region.end),
+                        config=greedy_cfg,
                     )
-                    sentence_vad_segments.append(VADSegment(start=float(start), end=float(end_)))
+                    out.extend([(int(region_id), float(s.start), float(s.end)) for s in segs])
+                return out
+
+            tasks = [_process_partition(p.region_ids()) for p in partitions]
+            grouped = await asyncio.gather(*tasks)
+            flat = [x for group in grouped for x in group]
+            flat.sort(key=lambda t: (t[1], t[2]))
+
+            for seg_id, (region_id, start, end_) in enumerate(flat):
+                sentence_segments.append(
+                    SentenceSegment(
+                        id=int(seg_id),
+                        start=float(start),
+                        end=float(end_),
+                        region_id=int(region_id),
+                    )
+                )
+                sentence_vad_segments.append(VADSegment(start=float(start), end=float(end_)))
 
             # 1) Cut sentence segments audio (concurrent ffmpeg)
             time_ranges = [(float(seg.start), float(seg.end)) for seg in sentence_segments]

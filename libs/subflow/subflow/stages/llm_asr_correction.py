@@ -8,7 +8,7 @@ import logging
 import time
 from typing import Any, cast
 
-from subflow.exceptions import StageExecutionError
+from subflow.exceptions import ConfigurationError, StageExecutionError
 from subflow.models.segment import ASRCorrectedSegment, ASRMergedChunk, ASRSegment, VADSegment
 from subflow.pipeline.concurrency import ServiceType, get_concurrency_tracker
 from subflow.pipeline.context import MetricsProgressReporter, PipelineContext, ProgressReporter
@@ -65,15 +65,12 @@ class LLMASRCorrectionStage(BaseLLMStage):
         asr_segments: list[ASRSegment] = list(context.get("asr_segments") or [])
         merged_chunks: list[ASRMergedChunk] = list(context.get("asr_merged_chunks") or [])
 
-        # Fallback if no API key
         if not self.api_key:
-            logger.info("llm_asr_correction fallback (no api key, profile=%s)", self.profile)
-            context["asr_corrected_segments"] = {
-                seg.id: ASRCorrectedSegment(id=seg.id, asr_segment_id=seg.id, text=seg.text)
-                for seg in asr_segments
-            }
-            context["asr_segments_index"] = {seg.id: seg for seg in asr_segments}
-            return context
+            profile = str(self.profile or "").strip().lower() or "fast"
+            env_key = "LLM_POWER_API_KEY" if profile == "power" else "LLM_FAST_API_KEY"
+            raise ConfigurationError(
+                f"{self.name} requires LLM api_key (profile={profile}); set {env_key}"
+            )
 
         asr_by_id: dict[int, ASRSegment] = {int(seg.id): seg for seg in asr_segments}
         corrected: dict[int, ASRCorrectedSegment] = {}
@@ -167,31 +164,27 @@ class LLMASRCorrectionStage(BaseLLMStage):
                 await progress_reporter.report(0, f"纠错中 0/{total_chunks} 区域")
 
         done_chunks = 0
-        parallel_enabled = bool(
-            getattr(self.settings, "parallel", None) and self.settings.parallel.enabled
+        # Use same parallel_gap_s config as Stage 3 greedy sentence ASR
+        parallel_gap_s = float(self.settings.greedy_sentence_asr.parallel_gap_s)
+        vad_regions: list[VADSegment] = list(context.get("vad_regions") or [])
+        partitions = partition_vad_regions_by_gap(
+            vad_regions,
+            min_gap_seconds=parallel_gap_s,
         )
-        if not parallel_enabled:
-            tasks = [asyncio.create_task(_process_chunk(c)) for c in merged_chunks]
-        else:
-            vad_regions: list[VADSegment] = list(context.get("vad_regions") or [])
-            partitions = partition_vad_regions_by_gap(
-                vad_regions,
-                min_gap_seconds=float(self.settings.parallel.min_gap_seconds),
-            )
-            logger.info(
-                "llm_asr_correction region partitions (regions=%d, partitions=%d, min_gap=%.2fs)",
-                len(vad_regions),
-                len(partitions),
-                float(self.settings.parallel.min_gap_seconds),
-            )
-            chunks_by_region: dict[int, list[ASRMergedChunk]] = {}
-            for c in merged_chunks:
-                chunks_by_region.setdefault(int(c.region_id), []).append(c)
-            ordered_chunks: list[ASRMergedChunk] = []
-            for part in partitions:
-                for rid in part.region_ids():
-                    ordered_chunks.extend(chunks_by_region.get(int(rid), []))
-            tasks = [asyncio.create_task(_process_chunk(c)) for c in ordered_chunks]
+        logger.info(
+            "llm_asr_correction region partitions (regions=%d, partitions=%d, min_gap=%.2fs)",
+            len(vad_regions),
+            len(partitions),
+            parallel_gap_s,
+        )
+        chunks_by_region: dict[int, list[ASRMergedChunk]] = {}
+        for c in merged_chunks:
+            chunks_by_region.setdefault(int(c.region_id), []).append(c)
+        ordered_chunks: list[ASRMergedChunk] = []
+        for part in partitions:
+            for rid in part.region_ids():
+                ordered_chunks.extend(chunks_by_region.get(int(rid), []))
+        tasks = [asyncio.create_task(_process_chunk(c)) for c in ordered_chunks]
 
         for fut in asyncio.as_completed(tasks):
             updates, usage = await fut

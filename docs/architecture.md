@@ -240,7 +240,7 @@ Stage 4 处理:
 **并行策略（2026-01）**：
 - 纠错任务以 `asr_merged_chunks` 为单位执行
 - `asr_merged_chunks` 的窗口大小由 `GREEDY_SENTENCE_ASR_FALLBACK_CHUNK_S` 控制（默认 15s）
-- 当启用 `PARALLEL_ENABLED=true` 时，基于 `vad_regions` 的 region gap 进行分区并行
+- 基于 `vad_regions` 的 region gap 进行分区并行，使用 `GREEDY_SENTENCE_ASR_PARALLEL_GAP_S` 配置
 - LLM 并发上限按服务类型控制：`CONCURRENCY_LLM_FAST` / `CONCURRENCY_LLM_POWER`
 
 **输入 Artifact**: `sentence_segments.json` + `asr_segments.json` + `asr_merged_chunks.json`  

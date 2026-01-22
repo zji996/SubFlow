@@ -8,7 +8,7 @@ import logging
 import time
 from typing import Any, cast
 
-from subflow.exceptions import StageExecutionError
+from subflow.exceptions import ConfigurationError, StageExecutionError
 from subflow.models.segment import (
     ASRCorrectedSegment,
     ASRSegment,
@@ -80,15 +80,11 @@ class GlobalUnderstandingPass(BaseLLMStage):
         tracker = get_concurrency_tracker(self.settings)
 
         if not self.api_key:
-            logger.info("llm_global_understanding fallback (no api key, profile=%s)", self.profile)
-            context["global_context"] = {
-                "topic": "unknown",
-                "domain": "unknown",
-                "style": "unknown",
-                "glossary": {},
-                "translation_notes": [],
-            }
-            return context
+            profile = str(self.profile or "").strip().lower() or "fast"
+            env_key = "LLM_POWER_API_KEY" if profile == "power" else "LLM_FAST_API_KEY"
+            raise ConfigurationError(
+                f"{self.name} requires LLM api_key (profile={profile}); set {env_key}"
+            )
 
         raw_tokens = count_tokens(transcript)
         transcript = truncate_to_tokens(transcript, self.MAX_TRANSCRIPT_TOKENS, strategy="sample")
@@ -273,28 +269,11 @@ class SemanticChunkingPass(BaseLLMStage):
         total = len(translatable)
 
         if not self.api_key:
-            logger.info("llm_semantic_chunking fallback (no api key, profile=%s)", self.profile)
-            translations: list[SegmentTranslation] = []
-            chunks: list[SemanticChunk] = []
-            for seg in translatable:
-                src = _src_text(seg)
-                tr = f"[{target_language}] {src}"
-                translations.append(
-                    SegmentTranslation(segment_id=int(seg.id), source_text=src, translation=tr)
-                )
-                chunks.append(
-                    SemanticChunk(
-                        id=int(seg.id),
-                        text=src,
-                        translation=tr,
-                        asr_segment_ids=[int(seg.id)],
-                        translation_chunks=[],
-                    )
-                )
-            context["segment_translations"] = translations
-            context["semantic_chunks"] = chunks
-            context["asr_segments_index"] = {seg.id: seg for seg in asr_segments}
-            return context
+            profile = str(self.profile or "").strip().lower() or "fast"
+            env_key = "LLM_POWER_API_KEY" if profile == "power" else "LLM_FAST_API_KEY"
+            raise ConfigurationError(
+                f"{self.name} requires LLM api_key (profile={profile}); set {env_key}"
+            )
 
         if progress_reporter and total > 0:
             if isinstance(progress_reporter, MetricsProgressReporter):

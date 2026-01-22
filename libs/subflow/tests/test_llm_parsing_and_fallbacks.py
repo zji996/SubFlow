@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from subflow.exceptions import ConfigurationError
 from subflow.models.segment import ASRSegment
 from subflow.stages.llm_asr_correction import LLMASRCorrectionStage
 from subflow.stages.llm_passes import SemanticChunkingPass, _compact_global_context
@@ -9,17 +10,15 @@ from subflow.utils.llm_json_parser import parse_id_text_array
 
 
 @pytest.mark.asyncio
-async def test_llm_asr_correction_fallback_keeps_all_segments(settings) -> None:
+async def test_llm_asr_correction_raises_without_api_key(settings) -> None:
     stage = LLMASRCorrectionStage.__new__(LLMASRCorrectionStage)
     stage.settings = settings
     stage.profile = "fast"
     stage.api_key = ""
 
     ctx = {"asr_segments": [ASRSegment(id=0, start=0.0, end=1.0, text="hi", language="en")]}
-    out = await stage.execute(ctx)
-    assert "asr_corrected_segments" in out
-    assert out["asr_corrected_segments"][0].text == "hi"
-    assert out["asr_segments_index"][0].text == "hi"
+    with pytest.raises(ConfigurationError):
+        await stage.execute(ctx)
 
 
 def test_compact_global_context_defaults() -> None:

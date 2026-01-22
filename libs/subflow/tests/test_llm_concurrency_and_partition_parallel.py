@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from subflow.config import Settings
+from subflow.exceptions import ConfigurationError
 from subflow.models.segment import ASRSegment
 from subflow.stages.base_llm import BaseLLMStage
 from subflow.stages.llm_passes import SemanticChunkingPass
@@ -38,7 +39,7 @@ def test_base_llm_stage_get_concurrency_limit_selects_by_profile(monkeypatch, tm
 
 
 @pytest.mark.asyncio
-async def test_semantic_chunking_pass_fallback_is_one_to_one(monkeypatch, tmp_path) -> None:
+async def test_semantic_chunking_pass_raises_without_api_key(monkeypatch, tmp_path) -> None:
     monkeypatch.chdir(tmp_path)
     settings = Settings(
         _env_file=None,
@@ -54,16 +55,14 @@ async def test_semantic_chunking_pass_fallback_is_one_to_one(monkeypatch, tmp_pa
     stage.profile = "power"
     stage.api_key = ""
 
-    ctx = await stage.execute(
-        {
-            "asr_segments": [
-                ASRSegment(id=i, start=float(i), end=float(i + 1), text=f"t{i}") for i in range(6)
-            ],
-            "target_language": "zh",
-            "global_context": {"topic": "x"},
-        }
-    )
-
-    chunks = list(ctx.get("semantic_chunks") or [])
-    assert [c.id for c in chunks] == [0, 1, 2, 3, 4, 5]
-    assert [c.asr_segment_ids for c in chunks] == [[0], [1], [2], [3], [4], [5]]
+    with pytest.raises(ConfigurationError):
+        await stage.execute(
+            {
+                "asr_segments": [
+                    ASRSegment(id=i, start=float(i), end=float(i + 1), text=f"t{i}")
+                    for i in range(6)
+                ],
+                "target_language": "zh",
+                "global_context": {"topic": "x"},
+            }
+        )

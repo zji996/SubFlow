@@ -118,20 +118,6 @@ class ConcurrencyConfig(BaseSettings):
     llm_power: int = Field(default=4, ge=1)
 
 
-class ParallelConfig(BaseSettings):
-    """Region-gap based parallel processing config."""
-
-    model_config = SettingsConfigDict(
-        env_prefix="PARALLEL_",
-        env_file=_ENV_FILES,
-        env_file_encoding="utf-8",
-        extra="ignore",
-    )
-
-    enabled: bool = True
-    min_gap_seconds: float = Field(default=1.0, ge=0.1)
-
-
 class AudioConfig(BaseSettings):
     """Audio processing configuration."""
 
@@ -283,9 +269,6 @@ class Settings(BaseSettings):
 
     # Concurrency (service-level)
     concurrency: ConcurrencyConfig = ConcurrencyConfig()
-
-    # Region-gap based parallel processing (Stage 4 + Stage 5)
-    parallel: ParallelConfig = ParallelConfig()
 
     @model_validator(mode="after")
     def _resolve_paths(self) -> "Settings":
