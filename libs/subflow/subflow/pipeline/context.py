@@ -55,7 +55,6 @@ class PipelineContext(TypedDict, total=False):
     audio_path: str
     vocals_audio_path: str
 
-    vad_segments: list[VADSegment]
     vad_regions: list[VADSegment]
 
     asr_segments: list[ASRSegment]

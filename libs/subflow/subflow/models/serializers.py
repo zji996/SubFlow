@@ -6,7 +6,6 @@ from typing import Any
 
 from subflow.models.segment import (
     ASRCorrectedSegment,
-    ASRMergedChunk,
     ASRSegment,
     SemanticChunk,
     TranslationChunk,
@@ -29,15 +28,25 @@ def _split_text_evenly(text: str, parts: int) -> list[str]:
     return out
 
 
-def serialize_vad_segments(segs: list[VADSegment]) -> list[dict[str, float]]:
-    return [{"start": float(s.start), "end": float(s.end)} for s in segs]
+def serialize_vad_regions(regions: list[VADSegment]) -> list[dict[str, float]]:
+    return [{"start": float(r.start), "end": float(r.end)} for r in regions]
 
 
-def deserialize_vad_segments(items: list[dict[str, Any]]) -> list[VADSegment]:
+def deserialize_vad_regions(items: list[dict[str, Any]]) -> list[VADSegment]:
     out: list[VADSegment] = []
     for item in items:
         out.append(VADSegment(start=float(item["start"]), end=float(item["end"])))
     return out
+
+
+def serialize_vad_segments(segs: list[VADSegment]) -> list[dict[str, float]]:
+    """Deprecated: use `serialize_vad_regions`."""
+    return serialize_vad_regions(segs)
+
+
+def deserialize_vad_segments(items: list[dict[str, Any]]) -> list[VADSegment]:
+    """Deprecated: use `deserialize_vad_regions`."""
+    return deserialize_vad_regions(items)
 
 
 def serialize_asr_segments(segs: list[ASRSegment]) -> list[dict[str, Any]]:
@@ -94,36 +103,6 @@ def deserialize_asr_corrected_segments(
             id=seg_id,
             asr_segment_id=int(item.get("asr_segment_id", seg_id)),
             text=str(item.get("text", "")),
-        )
-    return out
-
-
-def serialize_asr_merged_chunks(items: list[ASRMergedChunk]) -> list[dict[str, Any]]:
-    return [
-        {
-            "region_id": int(c.region_id),
-            "chunk_id": int(c.chunk_id),
-            "start": float(c.start),
-            "end": float(c.end),
-            "segment_ids": [int(x) for x in list(c.segment_ids or [])],
-            "text": str(c.text or ""),
-        }
-        for c in items
-    ]
-
-
-def deserialize_asr_merged_chunks(items: list[dict[str, Any]]) -> list[ASRMergedChunk]:
-    out: list[ASRMergedChunk] = []
-    for item in items:
-        out.append(
-            ASRMergedChunk(
-                region_id=int(item.get("region_id") or 0),
-                chunk_id=int(item.get("chunk_id") or 0),
-                start=float(item.get("start") or 0.0),
-                end=float(item.get("end") or 0.0),
-                segment_ids=[int(x) for x in list(item.get("segment_ids") or [])],
-                text=str(item.get("text") or ""),
-            )
         )
     return out
 

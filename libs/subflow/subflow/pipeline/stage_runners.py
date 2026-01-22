@@ -28,7 +28,7 @@ from subflow.repositories import (
     GlobalContextRepository,
     ProjectRepository,
     SemanticChunkRepository,
-    VADSegmentRepository,
+    VADRegionRepository,
 )
 from subflow.stages import (
     ASRStage,
@@ -137,7 +137,7 @@ class StageRunner(ABC):
         settings: Settings,
         store: ArtifactStore,
         project_repo: ProjectRepository,
-        vad_repo: VADSegmentRepository,
+        vad_repo: VADRegionRepository,
         asr_repo: ASRSegmentRepository,
         asr_merged_chunk_repo: ASRMergedChunkRepository,
         global_context_repo: GlobalContextRepository,
@@ -156,9 +156,9 @@ class AudioPreprocessRunner(StageRunner):
         self,
         *,
         settings: Settings,
-        store: ArtifactStore,
+        store: ArtifactStore,  # noqa: ARG002
         project_repo: ProjectRepository,
-        vad_repo: VADSegmentRepository,  # noqa: ARG002
+        vad_repo: VADRegionRepository,  # noqa: ARG002
         asr_repo: ASRSegmentRepository,  # noqa: ARG002
         asr_merged_chunk_repo: ASRMergedChunkRepository,  # noqa: ARG002
         global_context_repo: GlobalContextRepository,  # noqa: ARG002
@@ -213,8 +213,7 @@ class AudioPreprocessRunner(StageRunner):
             await project_repo.update_media_files(project.id, media_files)
             project.media_files = dict(media_files)
 
-        ident = await store.save_json(project.id, self.stage_name.value, "stage1.json", payload)
-        return ctx, {"stage1.json": ident}
+        return ctx, {}
 
 
 class VADRunner(StageRunner):
@@ -226,7 +225,7 @@ class VADRunner(StageRunner):
         settings: Settings,
         store: ArtifactStore,
         project_repo: ProjectRepository,  # noqa: ARG002
-        vad_repo: VADSegmentRepository,
+        vad_repo: VADRegionRepository,
         asr_repo: ASRSegmentRepository,  # noqa: ARG002
         asr_merged_chunk_repo: ASRMergedChunkRepository,  # noqa: ARG002
         global_context_repo: GlobalContextRepository,  # noqa: ARG002
@@ -242,27 +241,15 @@ class VADRunner(StageRunner):
             await _maybe_close(stage)
 
         await vad_repo.delete_by_project(project.id)
-        vad_segments: list[VADSegment] = list(ctx.get("vad_segments") or [])
-        vad_regions: list[VADSegment] = list(ctx.get("vad_regions") or [])
-        if vad_segments and vad_regions:
-            regions = sorted(vad_regions, key=lambda r: float(r.start))
-            region_idx = 0
-            for seg in vad_segments:
-                while region_idx < len(regions) and float(seg.start) >= float(
-                    regions[region_idx].end
-                ):
-                    region_idx += 1
-                assigned: int | None = None
-                for j in range(region_idx, len(regions)):
-                    r = regions[j]
-                    if float(seg.end) <= float(r.end) and float(seg.start) >= float(r.start):
-                        assigned = j
-                        region_idx = j
-                        break
-                    if float(seg.start) < float(r.start):
-                        break
-                seg.region_id = assigned
-        await vad_repo.bulk_insert(project.id, vad_segments)
+        vad_regions: list[VADSegment] = list(ctx.get("vad_regions") or ctx.get("vad_segments") or [])
+        if "vad_regions" not in ctx and ctx.get("vad_segments"):
+            ctx["vad_regions"] = list(ctx.get("vad_segments") or [])
+        ctx.pop("vad_segments", None)
+
+        for i, region in enumerate(vad_regions):
+            if region.region_id is None:
+                region.region_id = int(i)
+        await vad_repo.bulk_insert(project.id, vad_regions)
 
         artifacts: dict[str, str] = {}
         frame_probs = ctx.get("vad_frame_probs")
@@ -285,9 +272,9 @@ class ASRRunner(StageRunner):
         self,
         *,
         settings: Settings,
-        store: ArtifactStore,
+        store: ArtifactStore,  # noqa: ARG002
         project_repo: ProjectRepository,  # noqa: ARG002
-        vad_repo: VADSegmentRepository,  # noqa: ARG002
+        vad_repo: VADRegionRepository,  # noqa: ARG002
         asr_repo: ASRSegmentRepository,
         asr_merged_chunk_repo: ASRMergedChunkRepository,
         global_context_repo: GlobalContextRepository,  # noqa: ARG002
@@ -310,22 +297,7 @@ class ASRRunner(StageRunner):
         await asr_merged_chunk_repo.delete_by_project(project.id)
         if merged_chunks:
             await asr_merged_chunk_repo.bulk_upsert(project.id, merged_chunks)
-        merged_ident = ""
-        if merged_chunks:
-            from subflow.models.serializers import serialize_asr_merged_chunks
-
-            merged_ident = await store.save_json(
-                project.id,
-                self.stage_name.value,
-                "asr_merged_chunks.json",
-                serialize_asr_merged_chunks(merged_chunks),
-            )
-        artifacts: dict[str, str] = {}
-        if merged_ident:
-            artifacts["asr_merged_chunks.json"] = merged_ident
-        return ctx, {
-            **artifacts,
-        }
+        return ctx, {}
 
 
 class LLMASRCorrectionRunner(StageRunner):
@@ -335,9 +307,9 @@ class LLMASRCorrectionRunner(StageRunner):
         self,
         *,
         settings: Settings,
-        store: ArtifactStore,
+        store: ArtifactStore,  # noqa: ARG002
         project_repo: ProjectRepository,  # noqa: ARG002
-        vad_repo: VADSegmentRepository,  # noqa: ARG002
+        vad_repo: VADRegionRepository,  # noqa: ARG002
         asr_repo: ASRSegmentRepository,
         asr_merged_chunk_repo: ASRMergedChunkRepository,  # noqa: ARG002
         global_context_repo: GlobalContextRepository,  # noqa: ARG002
@@ -369,9 +341,9 @@ class LLMRunner(StageRunner):
         self,
         *,
         settings: Settings,
-        store: ArtifactStore,
+        store: ArtifactStore,  # noqa: ARG002
         project_repo: ProjectRepository,  # noqa: ARG002
-        vad_repo: VADSegmentRepository,  # noqa: ARG002
+        vad_repo: VADRegionRepository,  # noqa: ARG002
         asr_repo: ASRSegmentRepository,  # noqa: ARG002
         asr_merged_chunk_repo: ASRMergedChunkRepository,  # noqa: ARG002
         global_context_repo: GlobalContextRepository,

@@ -34,8 +34,8 @@ async def test_vad_stage_uses_vocals_audio_path(tmp_path) -> None:
     )
 
     assert stage.provider.called_with == str(vocals_path)  # type: ignore[union-attr]
-    assert out["vad_segments"][0].start == 0.0
-    assert out["vad_segments"][0].end == 1.0
+    assert out["vad_regions"][0].start == 0.0
+    assert out["vad_regions"][0].end == 1.0
 
 
 async def test_vad_stage_does_not_hard_split_provider_segments(tmp_path) -> None:
@@ -53,7 +53,7 @@ async def test_vad_stage_does_not_hard_split_provider_segments(tmp_path) -> None
     stage.provider = _LongDummyProvider()  # type: ignore[assignment]
 
     out = await stage.execute({"vocals_audio_path": str(tmp_path / "vocals.wav")})
-    segs = out["vad_segments"]
+    segs = out["vad_regions"]
     assert [(s.start, s.end) for s in segs] == [(0.0, 25.0)]
 
 

@@ -1,4 +1,4 @@
-"""Utilities to map VAD regions to VAD segments."""
+"""Utilities to map VAD regions to child segments."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from subflow.models.segment import VADSegment
 
 def build_region_segment_ids(
     vad_regions: Sequence[VADSegment] | None,
-    vad_segments: Sequence[VADSegment] | None,
+    segments: Sequence[VADSegment] | None,
     *,
     eps: float = 1e-3,
 ) -> list[list[int]]:
@@ -20,7 +20,7 @@ def build_region_segment_ids(
     region covering all segments is returned.
     """
     regions = list(vad_regions or [])
-    segments = list(vad_segments or [])
+    segments = list(segments or [])
     if not segments:
         return []
     if not regions:

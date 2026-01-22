@@ -62,7 +62,7 @@ bash scripts/manager.sh up
 Stage 顺序与名称（结构化数据存储在 PostgreSQL，详见 `docs/database.md`）：
 
 1. `audio_preprocess`：抽音频 + 人声分离（Demucs）→ BlobStore
-2. `vad`：NeMo VAD → `vad_segments` 表
+2. `vad`：NeMo VAD → `vad_segments` 表（存储 `vad_regions`）
 3. `asr`：分段 ASR + 合并块 ASR → `asr_segments` 表
 4. `llm_asr_correction`：用合并块 ASR 纠错分段 ASR → 更新 `asr_segments.corrected_text`
 5. `llm`：全局理解 + 语义切分+翻译 → `global_contexts` / `semantic_chunks` / `translation_chunks` 表

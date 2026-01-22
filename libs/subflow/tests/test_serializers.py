@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from subflow.models.segment import (
     ASRCorrectedSegment,
-    ASRMergedChunk,
     ASRSegment,
     SemanticChunk,
     TranslationChunk,
@@ -10,22 +9,20 @@ from subflow.models.segment import (
 )
 from subflow.models.serializers import (
     deserialize_asr_corrected_segments,
-    deserialize_asr_merged_chunks,
     deserialize_asr_segments,
     deserialize_semantic_chunks,
-    deserialize_vad_segments,
+    deserialize_vad_regions,
     serialize_asr_corrected_segments,
-    serialize_asr_merged_chunks,
     serialize_asr_segments,
     serialize_semantic_chunks,
-    serialize_vad_segments,
+    serialize_vad_regions,
 )
 
 
 def test_vad_roundtrip() -> None:
     items = [VADSegment(start=0.1, end=1.2), VADSegment(start=2.0, end=3.0)]
-    raw = serialize_vad_segments(items)
-    restored = deserialize_vad_segments(raw)
+    raw = serialize_vad_regions(items)
+    restored = deserialize_vad_regions(raw)
     assert restored == items
 
 
@@ -50,18 +47,6 @@ def test_asr_corrected_segments_roundtrip_sorted() -> None:
     restored = deserialize_asr_corrected_segments(raw)
     assert restored[1].text == "b"
     assert restored[2].text == "c"
-
-
-def test_asr_merged_chunks_roundtrip() -> None:
-    merged = [
-        ASRMergedChunk(
-            region_id=0, chunk_id=0, start=0.0, end=2.0, segment_ids=[0, 1], text="hello"
-        ),
-    ]
-    raw = serialize_asr_merged_chunks(merged)
-    restored = deserialize_asr_merged_chunks(raw)
-    assert restored[0].segment_ids == [0, 1]
-    assert restored[0].text == "hello"
 
 
 def test_semantic_chunks_roundtrip_with_translation_chunks() -> None:

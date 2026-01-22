@@ -249,7 +249,7 @@ async def test_orchestrator_runs_up_to_target_stage(tmp_path, monkeypatch) -> No
             segs = [VADSegment(start=0.0, end=1.0)]
             await vad_repo.bulk_insert(project.id, segs)
             out = dict(ctx)
-            out["vad_segments"] = segs
+            out["vad_regions"] = segs
             return out, {}
 
     monkeypatch.setitem(RUNNERS, StageName.VAD, _VADRunner())
@@ -269,7 +269,7 @@ async def test_orchestrator_runs_up_to_target_stage(tmp_path, monkeypatch) -> No
     project, ctx = await orchestrator.run_stage(project, StageName.VAD)
 
     assert project.current_stage == 2
-    assert "vad_segments" in ctx
+    assert "vad_regions" in ctx
     assert vad_repo._segs["p1"][0].start == 0.0
     sr1 = await stage_run_repo.get("p1", StageName.AUDIO_PREPROCESS.value)
     assert sr1 is not None
@@ -317,8 +317,8 @@ async def test_orchestrator_skips_when_already_completed(tmp_path) -> None:
 
     assert len(project.stage_runs) == before_runs
     assert project.current_stage == 2
-    assert ctx["vad_segments"][0].start == 0.0
-    assert ctx["vad_segments"][0].end == 1.0
+    assert ctx["vad_regions"][0].start == 0.0
+    assert ctx["vad_regions"][0].end == 1.0
 
 
 async def test_orchestrator_runs_llm_asr_correction_stage(tmp_path, monkeypatch) -> None:
@@ -381,7 +381,6 @@ async def test_orchestrator_runs_llm_asr_correction_stage(tmp_path, monkeypatch)
             segs = [VADSegment(start=0.0, end=1.0)]
             await vad_repo.bulk_insert(project.id, segs)
             out = dict(ctx)
-            out["vad_segments"] = segs
             out["vad_regions"] = segs
             return out, {}
 

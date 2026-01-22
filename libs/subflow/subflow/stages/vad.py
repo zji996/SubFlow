@@ -52,7 +52,7 @@ class VADStage(Stage):
             raise StageExecutionError(self.name, hint) from exc
         context = cast(PipelineContext, dict(context))
         # Stage 3 now does sentence-aligned splitting, so keep VAD output coarse by default.
-        # For backward compatibility, we still populate both keys.
+        # Consumers should prefer `vad_regions`; `vad_segments` is a legacy alias (read-only fallback).
         regions = getattr(self.provider, "last_regions", None)
         vad_regions = (
             [VADSegment(start=s, end=e) for s, e in regions]
@@ -60,14 +60,12 @@ class VADStage(Stage):
             else [VADSegment(start=s, end=e) for s, e in timestamps]
         )
         context["vad_regions"] = vad_regions
-        context["vad_segments"] = list(vad_regions)
 
         if frame_probs is not None:
             context["vad_frame_probs"] = frame_probs
             context["vad_frame_hop_s"] = float(getattr(self.provider, "frame_hop_s", 0.02))
         logger.info(
-            "vad done (segments=%d, regions=%d, frame_probs=%s)",
-            len(context.get("vad_segments") or []),
+            "vad done (regions=%d, frame_probs=%s)",
             len(context.get("vad_regions") or []),
             "yes" if context.get("vad_frame_probs") is not None else "no",
         )

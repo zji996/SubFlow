@@ -28,7 +28,7 @@ from subflow.repositories import (
     ProjectRepository,
     SemanticChunkRepository,
     StageRunRepository,
-    VADSegmentRepository,
+    VADRegionRepository,
 )
 from subflow.storage.artifact_store import ArtifactStore
 from subflow.utils.vad_frame_probs_io import decode_vad_frame_probs
@@ -155,7 +155,7 @@ class PipelineOrchestrator:
         *,
         project_repo: ProjectRepository,
         stage_run_repo: StageRunRepository,
-        vad_repo: VADSegmentRepository,
+        vad_repo: VADRegionRepository,
         asr_repo: ASRSegmentRepository,
         asr_merged_chunk_repo: ASRMergedChunkRepository,
         global_context_repo: GlobalContextRepository,
@@ -231,26 +231,11 @@ class PipelineOrchestrator:
                         path = entry.get("path")
                         if path:
                             ctx[ctx_key] = str(path)
-            if not (
-                ctx.get("video_path") and ctx.get("audio_path") and ctx.get("vocals_audio_path")
-            ):
-                try:
-                    stage1 = await self.store.load_json(
-                        project.id, StageName.AUDIO_PREPROCESS.value, "stage1.json"
-                    )
-                    if isinstance(stage1, dict):
-                        for key in ("video_path", "audio_path", "vocals_audio_path"):
-                            value = stage1.get(key)
-                            if value is not None:
-                                ctx[key] = str(value)
-                except FileNotFoundError:
-                    pass
 
         if project.current_stage >= _STAGE_INDEX[StageName.VAD]:
-            ctx["vad_segments"] = await self.vad_repo.get_by_project(project.id)
-            # Stage 3 expects coarse regions; persist a compatible key for in-memory runs,
-            # and try to hydrate frame-level VAD probabilities from artifacts for resume.
-            ctx["vad_regions"] = list(ctx.get("vad_segments") or [])
+            # Stage 3 expects coarse regions; hydrate from DB and try to load frame-level
+            # VAD probabilities from artifacts for resume.
+            ctx["vad_regions"] = await self.vad_repo.get_by_project(project.id)
             try:
                 raw = await self.store.load(project.id, StageName.VAD.value, "vad_frame_probs.bin")
             except FileNotFoundError:
@@ -268,20 +253,7 @@ class PipelineOrchestrator:
             ctx["full_transcript"] = " ".join(
                 seg.text for seg in list(ctx.get("asr_segments") or []) if (seg.text or "").strip()
             )
-            merged_chunks = await self.asr_merged_chunk_repo.get_by_project(project.id)
-            if merged_chunks:
-                ctx["asr_merged_chunks"] = merged_chunks
-            else:
-                try:
-                    merged = await self.store.load_json(
-                        project.id, StageName.ASR.value, "asr_merged_chunks.json"
-                    )
-                    if isinstance(merged, list):
-                        from subflow.models.serializers import deserialize_asr_merged_chunks
-
-                        ctx["asr_merged_chunks"] = deserialize_asr_merged_chunks(merged)
-                except FileNotFoundError:
-                    pass
+            ctx["asr_merged_chunks"] = await self.asr_merged_chunk_repo.get_by_project(project.id)
 
         if project.current_stage >= _STAGE_INDEX[StageName.LLM_ASR_CORRECTION]:
             corrected_map = await self.asr_repo.get_corrected_map(project.id)

@@ -135,7 +135,7 @@ SubFlow 是一个基于语义理解的视频字幕翻译系统。与传统的逐
 
 ```
 ┌────────────┐     ┌────────────┐     ┌────────────┐
-│ vocals.wav │────▶│ NeMo VAD   │────▶│  Segments  │
+│ vocals.wav │────▶│ NeMo VAD   │────▶│  Regions   │
 │            │     │            │     │  列表      │
 └────────────┘     └────────────┘     └────────────┘
 ```
@@ -146,9 +146,8 @@ SubFlow 是一个基于语义理解的视频字幕翻译系统。与传统的逐
 
 **输入 Artifact**: `vocals.wav`
 **输出 Artifact**:
-- `vad_segments.json` (细分片段时间戳列表)
-- `vad_regions.json` (非连续语音区域列表)
-- `vad_frame_probs` (帧级概率张量，用于贪心句子对齐模式)
+- `vad_regions` (PostgreSQL `vad_segments` 表，存储粗粒度语音区域)
+- `vad_frame_probs.bin` (ArtifactStore，帧级概率张量，用于贪心句子对齐模式)
 
 ---
 
@@ -315,8 +314,7 @@ Artifact
 |---------------|------|----------|
 | `VIDEO_INPUT` | 原始视频文件路径 | 输入 |
 | `VOCALS_AUDIO` | 提取的人声音频 | Stage 1 |
-| `VAD_SEGMENTS` | 语音活动时间段列表 | Stage 2 |
-| `VAD_REGIONS` | 非连续语音区域列表（可选） | Stage 2 |
+| `VAD_REGIONS` | 语音活动区域列表（存储在 PostgreSQL `vad_segments` 表） | Stage 2 |
 | `ASR_RESULTS` | 带时间戳的识别文本 | Stage 3 |
 | `ASR_MERGED_CHUNKS` | region 内合并识别块列表 | Stage 3 |
 | `FULL_TRANSCRIPT` | 完整转录文本 | Stage 3 |
@@ -351,7 +349,7 @@ SubFlow 采用 **PostgreSQL-First** 架构，详细请参考 [`docs/database.md`
 libs/subflow/subflow/repositories/
 ├── project_repo.py       # ProjectRepository
 ├── stage_run_repo.py     # StageRunRepository
-├── vad_segment_repo.py   # VADSegmentRepository
+├── vad_region_repo.py    # VADRegionRepository
 ├── asr_segment_repo.py   # ASRSegmentRepository
 ├── global_context_repo.py
 ├── semantic_chunk_repo.py

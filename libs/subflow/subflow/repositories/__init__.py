@@ -8,7 +8,10 @@ from subflow.repositories.project_repo import ProjectRepository
 from subflow.repositories.semantic_chunk_repo import SemanticChunkRepository
 from subflow.repositories.stage_run_repo import StageRunRepository
 from subflow.repositories.subtitle_export_repo import SubtitleExportRepository
-from subflow.repositories.vad_segment_repo import VADSegmentRepository
+from subflow.repositories.vad_region_repo import VADRegionRepository
+
+# Backward compatibility alias.
+VADSegmentRepository = VADRegionRepository
 
 __all__ = [
     "ASRMergedChunkRepository",
@@ -20,5 +23,6 @@ __all__ = [
     "SemanticChunkRepository",
     "StageRunRepository",
     "SubtitleExportRepository",
+    "VADRegionRepository",
     "VADSegmentRepository",
 ]

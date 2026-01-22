@@ -18,7 +18,7 @@ from subflow.repositories import (
     ProjectRepository,
     SemanticChunkRepository,
     StageRunRepository,
-    VADSegmentRepository,
+    VADRegionRepository,
 )
 from subflow.storage import get_artifact_store
 
@@ -33,7 +33,7 @@ async def process_project_task(task: dict[str, Any], redis: Redis, settings: Set
     pool = await DatabasePool.get_pool(settings)
     project_repo = ProjectRepository(pool)
     stage_run_repo = StageRunRepository(pool)
-    vad_repo = VADSegmentRepository(pool)
+    vad_repo = VADRegionRepository(pool)
     asr_repo = ASRSegmentRepository(pool)
     asr_merged_chunk_repo = ASRMergedChunkRepository(pool)
     global_context_repo = GlobalContextRepository(pool)

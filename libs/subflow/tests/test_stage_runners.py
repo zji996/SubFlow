@@ -139,7 +139,7 @@ class _FakeStage:
 
 
 @pytest.mark.asyncio
-async def test_audio_preprocess_runner_persists_stage1(settings, monkeypatch) -> None:
+async def test_audio_preprocess_runner_persists_media_files(settings, monkeypatch) -> None:
     store = InMemoryArtifactStore()
     runner = AudioPreprocessRunner()
     project = Project(id="p1", name="n", media_url="u", target_language="zh")
@@ -167,14 +167,14 @@ async def test_audio_preprocess_runner_persists_stage1(settings, monkeypatch) ->
         project=project,
         ctx={},
     )
-    assert artifacts["stage1.json"].startswith("mem://")
+    assert artifacts == {}
     assert ctx["audio_path"] == "a.wav"
-    assert any(name == "stage1.json" for _pid, _st, name, _payload in store.saved)
+    assert store.saved == []
     assert "audio" in project_repo.media_files["p1"]
 
 
 @pytest.mark.asyncio
-async def test_vad_runner_persists_segments_to_repo(settings, monkeypatch) -> None:
+async def test_vad_runner_persists_regions_to_repo(settings, monkeypatch) -> None:
     store = InMemoryArtifactStore()
     runner = VADRunner()
     project = Project(id="p1", name="n", media_url="u", target_language="zh")
@@ -186,7 +186,6 @@ async def test_vad_runner_persists_segments_to_repo(settings, monkeypatch) -> No
     semantic_chunk_repo = _FakeSemanticChunkRepo()
     stage = _FakeStage(
         {
-            "vad_segments": [VADSegment(start=0.0, end=1.0)],
             "vad_regions": [VADSegment(start=0.0, end=2.0)],
         }
     )
@@ -206,6 +205,7 @@ async def test_vad_runner_persists_segments_to_repo(settings, monkeypatch) -> No
     )
     assert artifacts == {}
     assert vad_repo.inserted["p1"][0].start == 0.0
+    assert vad_repo.inserted["p1"][0].end == 2.0
     assert vad_repo.inserted["p1"][0].region_id == 0
 
 
@@ -245,7 +245,8 @@ async def test_asr_runner_persists_segments_transcript_and_merged(settings, monk
         project=project,
         ctx={},
     )
-    assert set(artifacts.keys()) == {"asr_merged_chunks.json"}
+    assert artifacts == {}
+    assert store.saved == []
     assert asr_repo.inserted["p1"][0].text == "hi"
     assert asr_merged_chunk_repo.upserted["p1"][0].text == "hi"
 

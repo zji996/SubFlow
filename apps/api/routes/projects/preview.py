@@ -153,28 +153,66 @@ async def get_project_preview_segments(
                 )
             else:
                 await cur.execute(
-                    """
-                    SELECT COUNT(*) AS c
-                    FROM asr_segments a
-                    JOIN vad_segments v
-                      ON v.project_id=a.project_id AND v.segment_index=a.segment_index
-                    WHERE a.project_id=%s AND v.region_id=%s
-                    """,
-                    (project_id, int(region_id)),
+                    "SELECT 1 AS one FROM asr_merged_chunks WHERE project_id=%s LIMIT 1",
+                    (project_id,),
                 )
-                total = int((await cur.fetchone() or {}).get("c") or 0)
-                await cur.execute(
-                    """
-                    SELECT a.segment_index, a.start_time, a.end_time, a.text, a.corrected_text
-                    FROM asr_segments a
-                    JOIN vad_segments v
-                      ON v.project_id=a.project_id AND v.segment_index=a.segment_index
-                    WHERE a.project_id=%s AND v.region_id=%s
-                    ORDER BY a.segment_index ASC
-                    LIMIT %s OFFSET %s
-                    """,
-                    (project_id, int(region_id), int(limit), int(offset)),
-                )
+                has_merged_chunks = await cur.fetchone() is not None
+                if has_merged_chunks:
+                    await cur.execute(
+                        """
+                        WITH seg_ids AS (
+                          SELECT DISTINCT UNNEST(segment_ids) AS segment_index
+                          FROM asr_merged_chunks
+                          WHERE project_id=%s AND region_id=%s
+                        )
+                        SELECT COUNT(*) AS c
+                        FROM asr_segments a
+                        JOIN seg_ids s ON s.segment_index = a.segment_index
+                        WHERE a.project_id=%s
+                        """,
+                        (project_id, int(region_id), project_id),
+                    )
+                    total = int((await cur.fetchone() or {}).get("c") or 0)
+                    await cur.execute(
+                        """
+                        WITH seg_ids AS (
+                          SELECT DISTINCT UNNEST(segment_ids) AS segment_index
+                          FROM asr_merged_chunks
+                          WHERE project_id=%s AND region_id=%s
+                        )
+                        SELECT a.segment_index, a.start_time, a.end_time, a.text, a.corrected_text
+                        FROM asr_segments a
+                        JOIN seg_ids s ON s.segment_index = a.segment_index
+                        WHERE a.project_id=%s
+                        ORDER BY a.segment_index ASC
+                        LIMIT %s OFFSET %s
+                        """,
+                        (project_id, int(region_id), project_id, int(limit), int(offset)),
+                    )
+                else:
+                    await cur.execute(
+                        """
+                        SELECT COUNT(*) AS c
+                        FROM asr_segments a
+                        JOIN vad_segments v
+                          ON v.project_id=a.project_id AND v.segment_index=a.segment_index
+                        WHERE a.project_id=%s AND v.region_id=%s
+                        """,
+                        (project_id, int(region_id)),
+                    )
+                    total = int((await cur.fetchone() or {}).get("c") or 0)
+                    await cur.execute(
+                        """
+                        SELECT a.segment_index, a.start_time, a.end_time, a.text, a.corrected_text
+                        FROM asr_segments a
+                        JOIN vad_segments v
+                          ON v.project_id=a.project_id AND v.segment_index=a.segment_index
+                        WHERE a.project_id=%s AND v.region_id=%s
+                        ORDER BY a.segment_index ASC
+                        LIMIT %s OFFSET %s
+                        """,
+                        (project_id, int(region_id), int(limit), int(offset)),
+                    )
             seg_rows = await cur.fetchall()
 
             seg_ids = [int(r["segment_index"]) for r in seg_rows]

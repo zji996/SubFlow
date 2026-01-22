@@ -23,7 +23,7 @@ class MergedChunkSpec:
 
 def build_merged_chunk_specs(
     vad_regions: list[VADSegment] | None,
-    vad_segments: list[VADSegment] | None,
+    segments: list[VADSegment] | None,
     *,
     max_chunk_s: float = 30.0,
 ) -> list[MergedChunkSpec]:
@@ -33,7 +33,7 @@ def build_merged_chunk_specs(
     because merged chunks are cut from the original audio by [start, end].
     """
     regions = list(vad_regions or [])
-    segments = list(vad_segments or [])
+    segments = list(segments or [])
     if not segments:
         return []
 
