@@ -37,6 +37,12 @@ class StageMetrics(TypedDict, total=False):
     active_tasks: int
     max_concurrent: int
 
+    # 重试信息
+    retry_count: int  # 当前重试次数
+    retry_max: int  # 最大重试次数
+    retry_reason: str  # 重试原因
+    retry_status: str  # "retrying" | "recovered" | "failed"
+
 
 @runtime_checkable
 class MetricsProgressReporter(ProgressReporter, Protocol):

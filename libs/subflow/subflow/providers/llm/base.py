@@ -26,6 +26,32 @@ class LLMCompletionResult:
     usage: LLMUsage | None = None
 
 
+@dataclass(frozen=True)
+class ToolDefinition:
+    """Tool/Function definition (OpenAI-style JSON Schema parameters)."""
+
+    name: str
+    description: str
+    parameters: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ToolCall:
+    """A single tool/function call returned by the model."""
+
+    id: str
+    name: str
+    arguments: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ToolCallResult:
+    """Tool use result (one request may contain multiple tool calls)."""
+
+    tool_calls: list[ToolCall]
+    usage: LLMUsage | None = None
+
+
 class LLMProvider(ABC):
     """Abstract base class for LLM providers."""
 
@@ -56,6 +82,17 @@ class LLMProvider(ABC):
     ) -> LLMCompletionResult:
         text = await self.complete(messages, temperature=temperature, max_tokens=max_tokens)
         return LLMCompletionResult(text=text, usage=None)
+
+    async def complete_with_tools(
+        self,
+        messages: list[Message],
+        tools: list[ToolDefinition],
+        *,
+        parallel_tool_calls: bool = True,
+        temperature: float = 0.3,
+        max_tokens: int | None = None,
+    ) -> ToolCallResult:
+        raise NotImplementedError("Tool use is not supported by this LLM provider")
 
     @abstractmethod
     async def complete_json(

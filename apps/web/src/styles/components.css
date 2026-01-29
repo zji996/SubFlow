@@ -298,3 +298,171 @@
 .toast-error {
   border-color: rgba(239, 68, 68, 0.3);
 }
+
+/* ============================================
+   Pipeline Stage Styles
+   ============================================ */
+
+.stage-connector {
+  position: absolute;
+  left: 1.25rem;
+  top: 3.5rem;
+  bottom: -0.75rem;
+  width: 2px;
+  background: var(--color-border);
+}
+
+.stage-connector-completed {
+  background: linear-gradient(180deg, var(--color-success) 0%, var(--color-success) 100%);
+}
+
+.stage-connector-running {
+  background: linear-gradient(180deg, var(--color-primary) 0%, var(--color-border) 100%);
+}
+
+.stage-connector-pending {
+  background: repeating-linear-gradient(180deg,
+      var(--color-border) 0px,
+      var(--color-border) 4px,
+      transparent 4px,
+      transparent 8px);
+}
+
+.stage-node {
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  font-size: 0.875rem;
+  transition: all var(--transition-base);
+  position: relative;
+  z-index: 1;
+}
+
+.stage-node-completed {
+  background: linear-gradient(135deg, var(--color-success) 0%, #059669 100%);
+  color: white;
+  box-shadow: 0 0 12px rgba(16, 185, 129, 0.4);
+}
+
+.stage-node-running {
+  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-accent) 100%);
+  color: white;
+  box-shadow: 0 0 16px rgba(99, 102, 241, 0.5);
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+@keyframes pulse-glow {
+
+  0%,
+  100% {
+    box-shadow: 0 0 12px rgba(99, 102, 241, 0.4);
+  }
+
+  50% {
+    box-shadow: 0 0 20px rgba(99, 102, 241, 0.6);
+  }
+}
+
+.stage-node-failed {
+  background: linear-gradient(135deg, var(--color-error) 0%, #dc2626 100%);
+  color: white;
+  box-shadow: 0 0 12px rgba(239, 68, 68, 0.4);
+}
+
+.stage-node-pending {
+  background: var(--color-bg-elevated);
+  color: var(--color-text-muted);
+  border: 2px solid var(--color-border);
+}
+
+/* ============================================
+   Metric Cards
+   ============================================ */
+
+.metric-card {
+  padding: 0.625rem 0.875rem;
+  border-radius: 0.625rem;
+  background: rgba(15, 23, 42, 0.5);
+  border: 1px solid var(--color-border);
+  transition: all var(--transition-fast);
+}
+
+.metric-card:hover {
+  border-color: var(--color-border-light);
+  background: rgba(15, 23, 42, 0.7);
+}
+
+.metric-label {
+  font-size: 0.65rem;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.25rem;
+}
+
+.metric-value {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.metric-value-sm {
+  font-size: 0.8125rem;
+}
+
+/* ============================================
+   Summary Panel
+   ============================================ */
+
+.summary-panel {
+  background: linear-gradient(135deg, rgba(16, 185, 129, 0.08) 0%, rgba(99, 102, 241, 0.08) 100%);
+  border: 1px solid rgba(16, 185, 129, 0.2);
+  border-radius: 1rem;
+  padding: 1.25rem;
+}
+
+.summary-panel-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 600;
+  color: var(--color-text);
+  margin-bottom: 1rem;
+}
+
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1rem;
+}
+
+@media (min-width: 768px) {
+  .summary-grid {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+
+.summary-item {
+  text-align: center;
+  padding: 0.75rem;
+  border-radius: 0.75rem;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.summary-item-label {
+  font-size: 0.75rem;
+  color: var(--color-text-muted);
+  margin-bottom: 0.375rem;
+}
+
+.summary-item-value {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--color-text);
+  font-variant-numeric: tabular-nums;
+}

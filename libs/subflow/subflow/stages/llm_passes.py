@@ -17,12 +17,35 @@ from subflow.models.segment import (
 )
 from subflow.pipeline.concurrency import ServiceType, get_concurrency_tracker
 from subflow.pipeline.context import MetricsProgressReporter, PipelineContext, ProgressReporter
-from subflow.providers.llm import Message
+from subflow.providers.llm import Message, ToolDefinition
 from subflow.stages.base_llm import BaseLLMStage
-from subflow.utils.llm_json_parser import parse_id_text_array
+
 from subflow.utils.tokenizer import count_tokens, truncate_to_tokens
 
 logger = logging.getLogger(__name__)
+
+TRANSLATE_SEGMENT_TOOL = ToolDefinition(
+    name="translate_segment",
+    description=(
+        "Translate a single text segment from the source language to the target language. "
+        "Call this function once for each segment that needs to be translated."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "id": {
+                "type": "integer",
+                "description": "The unique ID of the segment being translated (must match the input ID)",
+            },
+            "translation": {
+                "type": "string",
+                "description": "The translated text in the target language",
+            },
+        },
+        "required": ["id", "translation"],
+        "additionalProperties": False,
+    },
+)
 
 
 def _compact_global_context(global_context: dict[str, Any] | None) -> dict[str, Any]:
@@ -181,6 +204,10 @@ class SemanticChunkingPass(BaseLLMStage):
             '{"id": 6, "text": "Seen my channel before,"}\n'
             '   - 应翻译为：id=5 → "如果你还没看过" / id=6 → "还没看过我频道的话，"\n'
             '   - 而不是：id=5 → "如果你还没" / id=6 → "看过我的频道，"\n\n'
+            "## 重要约束\n"
+            "- 必须为每个输入 id 输出对应翻译，不能遗漏\n"
+            "- 输出数组元素数量必须与输入一致\n"
+            '- 如果某句无法翻译，返回空字符串 ""，但 id 必须保留\n\n'
             "## 输入格式\n"
             "JSON 数组，每个元素包含 id 和 text：\n"
             "[\n"
@@ -194,6 +221,18 @@ class SemanticChunkingPass(BaseLLMStage):
             '  {"id": 1, "text": "翻译内容"}\n'
             "]\n\n"
             "只输出 JSON 数组，不要其他内容。"
+        )
+
+    def _get_tool_use_system_prompt(self) -> str:
+        return (
+            "你是一位专业的翻译专家。你将收到一批需要翻译的文本段落。\n\n"
+            "对于每个段落，请调用 translate_segment 函数进行翻译。\n"
+            "- id: 必须与输入的段落 id 完全一致\n"
+            "- translation: 翻译后的文本\n\n"
+            "翻译原则：\n"
+            "1. 意译优先，通顺自然\n"
+            "2. 适合字幕阅读\n"
+            "3. 每段独立可读（相邻段落可能是同一句话被错误断开，翻译时适当补充上下文）\n"
         )
 
     @staticmethod
@@ -292,9 +331,12 @@ class SemanticChunkingPass(BaseLLMStage):
             else:
                 await progress_reporter.report(0, f"翻译中 0/{total} 段")
 
-        system_prompt = self._get_system_prompt()
+        system_prompt_tool_use = self._get_tool_use_system_prompt()
         batch_size = max(
             1, int(getattr(self.settings.llm_limits, "translation_batch_size", 10) or 10)
+        )
+        translation_max_tokens = int(
+            getattr(self.settings.llm_limits, "translation_max_tokens", 8192) or 8192
         )
 
         translations: list[SegmentTranslation] = []
@@ -346,53 +388,190 @@ class SemanticChunkingPass(BaseLLMStage):
                 else:
                     await progress_reporter.report(pct, msg)
 
+        async def _report_retry(
+            attempt: int,
+            max_retries: int,
+            missing_count: int,
+            status: str,
+        ) -> None:
+            """Report retry status to frontend."""
+            if not progress_reporter or not isinstance(progress_reporter, MetricsProgressReporter):
+                return
+            async with progress_lock:
+                pct = int(min(done, total) / total * 100) if total > 0 else 0
+                elapsed = max(0.001, time.monotonic() - started_at)
+                state = await tracker.snapshot(service)
+                async with tokens_lock:
+                    prompt_t = int(llm_prompt_tokens)
+                    completion_t = int(llm_completion_tokens)
+                    calls_t = int(llm_calls)
+                tokens_total = prompt_t + completion_t
+                reason = f"缺失 {missing_count} 个翻译" if missing_count > 0 else "解析失败"
+                await progress_reporter.report_metrics(
+                    {
+                        "progress": pct,
+                        "progress_message": f"翻译中 {min(done, total)}/{total} 段",
+                        "items_processed": int(min(done, total)),
+                        "items_total": int(total),
+                        "items_per_second": float(min(done, total)) / elapsed,
+                        "llm_prompt_tokens": prompt_t,
+                        "llm_completion_tokens": completion_t,
+                        "llm_calls_count": calls_t,
+                        "llm_tokens_per_second": float(tokens_total) / elapsed,
+                        "active_tasks": int(state.active),
+                        "max_concurrent": int(state.max),
+                        "retry_count": attempt,
+                        "retry_max": max_retries + 1,
+                        "retry_reason": reason,
+                        "retry_status": status,
+                    }
+                )
+
         async def _translate_batch(batch: list[ASRSegment]) -> dict[int, str]:
             nonlocal done, llm_prompt_tokens, llm_completion_tokens, llm_calls
             batch_items: list[tuple[int, str]] = []
-            expected_ids: list[int] = []
             for seg in batch:
                 seg_id = int(seg.id)
-                expected_ids.append(seg_id)
                 batch_items.append((seg_id, _src_text(seg)))
 
-            user_input = self._build_batch_user_input(
-                target_language=target_language,
-                global_context=global_ctx,
-                items=batch_items,
-            )
+            # NOTE: JSON fallback has been removed. Tool Use only mode.
 
-            async with tracker.acquire(service):
-                result = await self.llm.complete_with_usage(
-                    [
-                        Message(role="system", content=system_prompt),
-                        Message(role="user", content=user_input),
-                    ],
-                    temperature=0.2,
-                )
+            async def _translate_batch_tool_use() -> dict[int, str]:
+                nonlocal llm_prompt_tokens, llm_completion_tokens, llm_calls
+                all_results: dict[int, str] = {}
+                max_retries = 3
 
-            raw_out = getattr(result, "text", "") or ""
-            try:
-                mapping = parse_id_text_array(str(raw_out), expected_ids=expected_ids)
-            except ValueError as exc:
-                raise StageExecutionError(
-                    self.name,
-                    f"Failed to parse batch translation output (ids={expected_ids}): {exc}",
-                ) from exc
+                for attempt in range(max_retries + 1):
+                    missing_items = [
+                        (int(i), t) for i, t in batch_items if int(i) not in all_results
+                    ]
+                    if not missing_items:
+                        break
 
-            usage = getattr(result, "usage", None)
-            prompt = getattr(usage, "prompt_tokens", None)
-            completion = getattr(usage, "completion_tokens", None)
-            async with tokens_lock:
-                if isinstance(prompt, int):
-                    llm_prompt_tokens += int(prompt)
-                if isinstance(completion, int):
-                    llm_completion_tokens += int(completion)
-                llm_calls += 1
+                    if attempt == 0:
+                        request_items = list(batch_items)
+                    else:
+                        request_items = list(missing_items)
+                        if len(request_items) > 5:
+                            chunk_size = max(1, len(request_items) // 2)
+                            offset = ((attempt - 1) * chunk_size) % len(request_items)
+                            request_items = request_items[offset : offset + chunk_size]
+                            if len(request_items) < chunk_size:
+                                request_items.extend(
+                                    list(missing_items)[: chunk_size - len(request_items)]
+                                )
+                            logger.warning(
+                                "batch translate tool_use reducing batch size for retry (attempt=%d/%d, missing=%d, request=%d)",
+                                attempt + 1,
+                                max_retries + 1,
+                                len(missing_items),
+                                len(request_items),
+                            )
+
+                    expected_ids = [int(i) for i, _t in request_items]
+                    expected_set = set(expected_ids)
+                    logger.debug(
+                        "batch translate tool_use loop start (attempt=%d/%d, expected_ids=%s, remaining_count=%d)",
+                        attempt + 1,
+                        max_retries + 1,
+                        expected_ids,
+                        len(request_items),
+                    )
+                    user_input = self._build_batch_user_input(
+                        target_language=target_language,
+                        global_context=global_ctx,
+                        items=request_items,
+                    )
+
+                    try:
+                        async with tracker.acquire(service):
+                            result = await self.llm.complete_with_tools(
+                                [
+                                    Message(role="system", content=system_prompt_tool_use),
+                                    Message(role="user", content=user_input),
+                                ],
+                                tools=[TRANSLATE_SEGMENT_TOOL],
+                                parallel_tool_calls=True,
+                                temperature=0.2,
+                                max_tokens=translation_max_tokens,
+                            )
+                    except NotImplementedError as exc:
+                        raise StageExecutionError(
+                            self.name,
+                            f"LLM provider does not support tool use: {exc}",
+                        ) from exc
+
+                    logger.debug(
+                        "batch translate tool_use (attempt=%d, ids=%s, input_len=%d, tool_calls=%d)",
+                        attempt + 1,
+                        expected_ids,
+                        len(user_input),
+                        len(list(getattr(result, "tool_calls", None) or [])),
+                    )
+
+                    usage = getattr(result, "usage", None)
+                    prompt = getattr(usage, "prompt_tokens", None)
+                    completion = getattr(usage, "completion_tokens", None)
+                    async with tokens_lock:
+                        if isinstance(prompt, int):
+                            llm_prompt_tokens += int(prompt)
+                        if isinstance(completion, int):
+                            llm_completion_tokens += int(completion)
+                        llm_calls += 1
+
+                    for call in list(getattr(result, "tool_calls", None) or []):
+                        if getattr(call, "name", None) != TRANSLATE_SEGMENT_TOOL.name:
+                            continue
+                        args = getattr(call, "arguments", None)
+                        if not isinstance(args, dict):
+                            continue
+                        seg_id = args.get("id")
+                        translated = args.get("translation")
+                        if isinstance(seg_id, bool):  # bool is int subclass, avoid
+                            continue
+                        if not isinstance(seg_id, int):
+                            if isinstance(seg_id, str) and seg_id.strip().isdigit():
+                                seg_id = int(seg_id.strip())
+                            else:
+                                continue
+                        if int(seg_id) not in expected_set:
+                            continue
+                        if int(seg_id) in all_results:
+                            continue
+                        all_results[int(seg_id)] = str(translated or "").strip()
+
+                    missing = [int(i) for i, _t in batch_items if int(i) not in all_results]
+                    will_retry = bool(missing) and attempt < max_retries
+                    logger.debug("missing_ids=%s, will_retry=%s", missing, will_retry)
+                    if will_retry:
+                        logger.warning(
+                            "batch translate tool_use missing ids, retrying (attempt=%d/%d, missing=%s)",
+                            attempt + 1,
+                            max_retries + 1,
+                            missing,
+                        )
+                        await _report_retry(attempt + 1, max_retries, len(missing), "retrying")
+                        continue
+                    break
+
+                expected_ids_all = [int(i) for i, _t in batch_items]
+                missing_final = [i for i in expected_ids_all if int(i) not in all_results]
+                if missing_final:
+                    logger.error(
+                        "batch translate tool_use still missing ids after retries; fallback to empty strings (missing=%s)",
+                        missing_final,
+                    )
+                    for seg_id in missing_final:
+                        all_results[int(seg_id)] = ""
+                return all_results
+
+            # Tool Use only - no JSON fallback
+            all_results = await _translate_batch_tool_use()
 
             async with done_lock:
                 done += len(batch)
             await _maybe_report()
-            return mapping
+            return all_results
 
         results = await asyncio.gather(*[_translate_batch(batch) for batch in batches])
         translation_by_id: dict[int, str] = {}

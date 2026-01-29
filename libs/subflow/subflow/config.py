@@ -64,6 +64,11 @@ class LLMLimitsConfig(BaseSettings):
     translation_batch_size: int = Field(
         default=10, ge=1, description="Soft limit per batch; extends to sentence endings."
     )
+    translation_max_tokens: int = Field(
+        default=16384,
+        ge=256,
+        description="Max tokens for translation batch output.",
+    )
 
 
 class LLMFastConfig(LLMProfileConfig):

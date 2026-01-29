@@ -19,7 +19,15 @@ from tenacity import (
 
 from subflow.error_codes import ErrorCode
 from subflow.exceptions import ProviderError
-from subflow.providers.llm.base import LLMCompletionResult, LLMProvider, LLMUsage, Message
+from subflow.providers.llm.base import (
+    LLMCompletionResult,
+    LLMProvider,
+    LLMUsage,
+    Message,
+    ToolCall,
+    ToolCallResult,
+    ToolDefinition,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +105,23 @@ def _format_http_error(response: httpx.Response, body: bytes | None) -> str:
             detail = detail[:2000] + "…"
         return f"HTTP {status} {reason}: {detail}"
     return f"HTTP {status} {reason}"
+
+
+def _looks_like_tool_use_unsupported(message: str) -> bool:
+    msg = str(message or "").lower()
+    return any(
+        token in msg
+        for token in (
+            "unknown parameter: tools",
+            "unknown parameter: tool_choice",
+            "unknown parameter: parallel_tool_calls",
+            'unrecognized field "tools"',
+            'unrecognized field "tool_choice"',
+            'unrecognized field "parallel_tool_calls"',
+            "does not support tools",
+            "tool calls are not supported",
+        )
+    )
 
 
 class OpenAICompatProvider(LLMProvider):
@@ -260,6 +285,203 @@ class OpenAICompatProvider(LLMProvider):
         text = "".join(text_chunks)
         return text, usage_parsed, latency_ms
 
+    @retry(
+        retry=retry_if_exception_type(_RetryableLLMError),
+        stop=stop_after_attempt(3),
+        wait=_wait_retry,
+        before_sleep=_log_retry,
+        reraise=True,
+    )
+    async def _chat_completions_with_tools(
+        self,
+        messages: list[Message],
+        tools: list[ToolDefinition],
+        *,
+        parallel_tool_calls: bool,
+        temperature: float,
+        max_tokens: int | None,
+    ) -> tuple[list[ToolCall], LLMUsage | None, int]:
+        strict = self.provider == "openai" and self.base_url == DEFAULT_OPENAI_BASE_URL.rstrip("/")
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": [{"role": m.role, "content": m.content} for m in messages],
+            "temperature": float(temperature),
+            "stream": True,
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": t.name,
+                        "description": t.description,
+                        **({"strict": True} if strict else {}),
+                        "parameters": t.parameters,
+                    },
+                }
+                for t in tools
+            ],
+            "parallel_tool_calls": bool(parallel_tool_calls),
+            "tool_choice": "required",
+        }
+        if max_tokens is not None:
+            payload["max_tokens"] = int(max_tokens)
+
+        client = await self._get_client()
+        started = time.perf_counter()
+        last_event: object | None = None
+        tool_call_buffers: dict[int, dict[str, Any]] = {}
+
+        async def _run_request(
+            payload_override: dict[str, Any],
+        ) -> tuple[LLMUsage | None, object | None]:
+            nonlocal last_event
+            async with client.stream(
+                "POST",
+                f"{self.base_url}/chat/completions",
+                headers=self._headers(),
+                json=payload_override,
+            ) as response:
+                if response.status_code >= 400:
+                    body = await response.aread()
+                    message = _format_http_error(response, body)
+                    if response.status_code == 400 and _looks_like_tool_use_unsupported(message):
+                        raise NotImplementedError(message)
+                    if response.status_code == 429 or response.status_code >= 500:
+                        raise _RetryableLLMError(
+                            self.provider,
+                            message,
+                            rate_limited=response.status_code == 429,
+                            error_code=ErrorCode.LLM_FAILED,
+                        )
+                    raise ProviderError(self.provider, message, error_code=ErrorCode.LLM_FAILED)
+
+                usage_from_header = self._parse_usage_header(response.headers)
+                async for data in _iter_sse_data(response):
+                    if data.strip() == "[DONE]":
+                        break
+                    try:
+                        event = json.loads(data)
+                    except json.JSONDecodeError:
+                        logger.debug("llm stream non-json data: %r", data[:200])
+                        continue
+
+                    last_event = event
+                    if isinstance(event, dict) and isinstance(event.get("error"), dict):
+                        error_obj = event["error"]
+                        error_msg = str(error_obj.get("message") or error_obj or "unknown error")
+                        raise ProviderError(
+                            self.provider, error_msg, error_code=ErrorCode.LLM_FAILED
+                        )
+
+                    if not isinstance(event, dict):
+                        continue
+                    choices = event.get("choices")
+                    if not isinstance(choices, list) or not choices:
+                        continue
+                    choice0 = choices[0]
+                    if not isinstance(choice0, dict):
+                        continue
+                    delta = choice0.get("delta")
+                    if not isinstance(delta, dict):
+                        continue
+                    tool_calls = delta.get("tool_calls")
+                    if not isinstance(tool_calls, list) or not tool_calls:
+                        continue
+                    for tc in tool_calls:
+                        if not isinstance(tc, dict):
+                            continue
+                        index = tc.get("index")
+                        if not isinstance(index, int):
+                            continue
+                        buf = tool_call_buffers.setdefault(index, {"arguments": ""})
+                        if isinstance(tc.get("id"), str):
+                            buf["id"] = tc["id"]
+                        func = tc.get("function")
+                        if isinstance(func, dict):
+                            if isinstance(func.get("name"), str) and func["name"]:
+                                buf["name"] = func["name"]
+                            if isinstance(func.get("arguments"), str) and func["arguments"]:
+                                buf["arguments"] = (
+                                    str(buf.get("arguments") or "") + func["arguments"]
+                                )
+
+                return usage_from_header, last_event
+
+        try:
+            try:
+                usage_from_header, last_event = await _run_request(payload)
+            except ProviderError as exc:
+                # Some proxies reject "strict" and/or "parallel_tool_calls". Retry once without them.
+                msg = str(exc).lower()
+                if "unknown parameter: strict" in msg or 'unrecognized field "strict"' in msg:
+                    payload2 = json.loads(json.dumps(payload))
+                    for item in payload2.get("tools", []):
+                        func = item.get("function") if isinstance(item, dict) else None
+                        if isinstance(func, dict):
+                            func.pop("strict", None)
+                    usage_from_header, last_event = await _run_request(payload2)
+                elif (
+                    "unknown parameter: parallel_tool_calls" in msg
+                    or 'unrecognized field "parallel_tool_calls"' in msg
+                ):
+                    payload2 = dict(payload)
+                    payload2.pop("parallel_tool_calls", None)
+                    usage_from_header, last_event = await _run_request(payload2)
+                else:
+                    raise
+        except httpx.TimeoutException as exc:
+            logger.warning("llm request timeout: %s", exc)
+            raise _RetryableLLMError(
+                self.provider,
+                str(exc),
+                error_code=ErrorCode.LLM_TIMEOUT,
+            ) from exc
+        except httpx.TransportError as exc:
+            logger.warning("llm request failed: %s", exc)
+            raise _RetryableLLMError(
+                self.provider,
+                str(exc),
+                error_code=ErrorCode.LLM_FAILED,
+            ) from exc
+
+        usage_parsed = usage_from_header or self._parse_usage(last_event)
+        latency_ms = int((time.perf_counter() - started) * 1000)
+
+        parsed_calls: list[ToolCall] = []
+        from subflow.utils.json_repair import parse_tool_arguments_safe
+
+        for index in sorted(tool_call_buffers):
+            buf = tool_call_buffers[index]
+            name = str(buf.get("name") or "").strip()
+            if not name:
+                continue
+            call_id = str(buf.get("id") or f"call_{index}")
+            raw_args = str(buf.get("arguments") or "").strip()
+
+            # Use safe parser that handles truncated JSON
+            args = parse_tool_arguments_safe(raw_args)
+            if args is None:
+                logger.warning(
+                    "Skipping tool_call with unparseable arguments (tool=%s, id=%s, args=%s...)",
+                    name,
+                    call_id,
+                    raw_args[:80] if raw_args else "",
+                )
+                continue
+            parsed_calls.append(ToolCall(id=call_id, name=name, arguments=args))
+
+        logger.info(
+            "llm tool call (provider=%s, model=%s, latency_ms=%s, tool_calls=%s, prompt_tokens=%s, completion_tokens=%s, total_tokens=%s)",
+            self.provider,
+            self.model,
+            latency_ms,
+            len(parsed_calls),
+            getattr(usage_parsed, "prompt_tokens", None),
+            getattr(usage_parsed, "completion_tokens", None),
+            getattr(usage_parsed, "total_tokens", None),
+        )
+
+        return parsed_calls, usage_parsed, latency_ms
+
     async def complete(
         self,
         messages: list[Message],
@@ -315,6 +537,24 @@ class OpenAICompatProvider(LLMProvider):
             return data
         except json.JSONDecodeError as e:
             raise ValueError(f"Failed to parse JSON response: {e}") from e
+
+    async def complete_with_tools(
+        self,
+        messages: list[Message],
+        tools: list[ToolDefinition],
+        *,
+        parallel_tool_calls: bool = True,
+        temperature: float = 0.3,
+        max_tokens: int | None = None,
+    ) -> ToolCallResult:
+        tool_calls, usage, _latency_ms = await self._chat_completions_with_tools(
+            messages,
+            tools,
+            parallel_tool_calls=parallel_tool_calls,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        return ToolCallResult(tool_calls=tool_calls, usage=usage)
 
     async def close(self) -> None:
         if self._client is not None:

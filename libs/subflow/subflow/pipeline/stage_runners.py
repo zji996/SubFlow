@@ -241,7 +241,9 @@ class VADRunner(StageRunner):
             await _maybe_close(stage)
 
         await vad_repo.delete_by_project(project.id)
-        vad_regions: list[VADSegment] = list(ctx.get("vad_regions") or ctx.get("vad_segments") or [])
+        vad_regions: list[VADSegment] = list(
+            ctx.get("vad_regions") or ctx.get("vad_segments") or []
+        )
         if "vad_regions" not in ctx and ctx.get("vad_segments"):
             ctx["vad_regions"] = list(ctx.get("vad_segments") or [])
         ctx.pop("vad_segments", None)

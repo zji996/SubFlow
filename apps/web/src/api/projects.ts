@@ -24,6 +24,11 @@ export interface StageRun {
         llm_calls_count?: number
         active_tasks?: number
         max_concurrent?: number
+        // 重试信息
+        retry_count?: number
+        retry_max?: number
+        retry_reason?: string
+        retry_status?: 'retrying' | 'recovered' | 'failed'
     } | null
     error_code?: string | null
     error_message?: string | null

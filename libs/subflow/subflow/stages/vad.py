@@ -34,6 +34,8 @@ class VADStage(Stage):
     ) -> PipelineContext:
         audio_path = str(context["vocals_audio_path"])
         logger.info("vad start (audio_path=%s)", audio_path)
+        if progress_reporter is not None:
+            await progress_reporter.report(0, "VAD 检测中...")
         try:
             frame_probs = None
             detect_with_probs = getattr(self.provider, "detect_with_probs", None)
@@ -69,4 +71,6 @@ class VADStage(Stage):
             len(context.get("vad_regions") or []),
             "yes" if context.get("vad_frame_probs") is not None else "no",
         )
+        if progress_reporter is not None:
+            await progress_reporter.report(100, "VAD 检测完成")
         return context

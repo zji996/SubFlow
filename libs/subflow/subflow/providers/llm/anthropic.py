@@ -18,7 +18,15 @@ from tenacity import (
 
 from subflow.error_codes import ErrorCode
 from subflow.exceptions import ProviderError
-from subflow.providers.llm.base import LLMCompletionResult, LLMProvider, LLMUsage, Message
+from subflow.providers.llm.base import (
+    LLMCompletionResult,
+    LLMProvider,
+    LLMUsage,
+    Message,
+    ToolCall,
+    ToolCallResult,
+    ToolDefinition,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -274,6 +282,157 @@ class AnthropicProvider(LLMProvider):
             return data
         except json.JSONDecodeError as exc:
             raise ValueError(f"Failed to parse JSON response: {exc}") from exc
+
+    @retry(
+        retry=retry_if_exception_type(_RetryableLLMError),
+        stop=stop_after_attempt(3),
+        wait=_wait_retry,
+        before_sleep=_log_retry,
+        reraise=True,
+    )
+    async def _messages_with_tools(
+        self,
+        messages: list[Message],
+        tools: list[ToolDefinition],
+        *,
+        parallel_tool_calls: bool,
+        temperature: float,
+        max_tokens: int | None,
+    ) -> tuple[list[ToolCall], LLMUsage | None, int]:
+        system, non_system = _split_system_messages(messages)
+        started = time.perf_counter()
+        try:
+            response = await self._client.messages.create(
+                model=self.model,
+                messages=_to_anthropic_messages(non_system),
+                system=system or anthropic.NOT_GIVEN,
+                temperature=float(temperature),
+                max_tokens=int(max_tokens) if max_tokens is not None else DEFAULT_MAX_TOKENS,
+                tools=[
+                    {
+                        "name": t.name,
+                        "description": t.description,
+                        "input_schema": t.parameters,
+                    }
+                    for t in tools
+                ],
+                tool_choice=(
+                    {"type": "any"}
+                    if parallel_tool_calls
+                    else {"type": "tool", "name": tools[0].name}
+                )
+                if tools
+                else anthropic.NOT_GIVEN,
+            )
+        except anthropic.RateLimitError as exc:
+            logger.warning("llm rate limited: %s", exc)
+            raise _RetryableLLMError(
+                self.provider,
+                str(exc),
+                rate_limited=True,
+                error_code=ErrorCode.LLM_FAILED,
+            ) from exc
+        except anthropic.APIStatusError as exc:
+            if exc.status_code == 400 and "tools" in str(exc).lower():
+                raise NotImplementedError(str(exc)) from exc
+            if exc.status_code >= 500:
+                logger.warning("llm server error: %s", exc)
+                raise _RetryableLLMError(
+                    self.provider,
+                    str(exc),
+                    error_code=ErrorCode.LLM_FAILED,
+                ) from exc
+            logger.warning("llm request failed: %s", exc)
+            raise ProviderError(
+                self.provider,
+                str(exc),
+                error_code=ErrorCode.LLM_FAILED,
+            ) from exc
+        except anthropic.APIConnectionError as exc:
+            logger.warning("llm connection error: %s", exc)
+            raise _RetryableLLMError(
+                self.provider,
+                str(exc),
+                error_code=ErrorCode.LLM_TIMEOUT,
+            ) from exc
+        except anthropic.APITimeoutError as exc:
+            logger.warning("llm timeout: %s", exc)
+            raise _RetryableLLMError(
+                self.provider,
+                str(exc),
+                error_code=ErrorCode.LLM_TIMEOUT,
+            ) from exc
+
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        usage_parsed: LLMUsage | None = None
+        usage = getattr(response, "usage", None)
+        prompt_tokens = getattr(usage, "input_tokens", None)
+        completion_tokens = getattr(usage, "output_tokens", None)
+        if isinstance(prompt_tokens, int) or isinstance(completion_tokens, int):
+            usage_parsed = LLMUsage(
+                prompt_tokens=int(prompt_tokens) if isinstance(prompt_tokens, int) else None,
+                completion_tokens=int(completion_tokens)
+                if isinstance(completion_tokens, int)
+                else None,
+                total_tokens=int(prompt_tokens + completion_tokens)
+                if isinstance(prompt_tokens, int) and isinstance(completion_tokens, int)
+                else None,
+            )
+
+        tool_calls: list[ToolCall] = []
+        from subflow.utils.json_repair import parse_tool_arguments_safe
+
+        for block in list(getattr(response, "content", None) or []):
+            block_type = getattr(block, "type", None)
+            if block_type != "tool_use":
+                continue
+            name = str(getattr(block, "name", "") or "").strip()
+            call_id = str(getattr(block, "id", "") or "").strip() or "tool_use"
+            args = getattr(block, "input", None)
+            if isinstance(args, str):
+                parsed = parse_tool_arguments_safe(args)
+                if parsed is None:
+                    logger.warning(
+                        "Skipping tool_call with unparseable arguments (tool=%s, id=%s, args=%s...)",
+                        name,
+                        call_id,
+                        args[:80] if args else "",
+                    )
+                    continue
+                args = parsed
+            if not isinstance(args, dict):
+                continue
+            tool_calls.append(ToolCall(id=call_id, name=name, arguments=args))
+
+        logger.info(
+            "llm tool call (provider=%s, model=%s, latency_ms=%s, tool_calls=%s, prompt_tokens=%s, completion_tokens=%s, total_tokens=%s)",
+            self.provider,
+            self.model,
+            latency_ms,
+            len(tool_calls),
+            getattr(usage_parsed, "prompt_tokens", None),
+            getattr(usage_parsed, "completion_tokens", None),
+            getattr(usage_parsed, "total_tokens", None),
+        )
+        return tool_calls, usage_parsed, latency_ms
+
+    async def complete_with_tools(
+        self,
+        messages: list[Message],
+        tools: list[ToolDefinition],
+        *,
+        parallel_tool_calls: bool = True,
+        temperature: float = 0.3,
+        max_tokens: int | None = None,
+    ) -> ToolCallResult:
+        tool_calls, usage, _latency_ms = await self._messages_with_tools(
+            messages,
+            tools,
+            parallel_tool_calls=parallel_tool_calls,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        return ToolCallResult(tool_calls=tool_calls, usage=usage)
 
     async def close(self) -> None:
         if self._client is not None:

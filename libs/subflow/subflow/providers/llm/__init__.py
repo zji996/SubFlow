@@ -4,7 +4,15 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from subflow.providers.llm.base import LLMCompletionResult, LLMProvider, LLMUsage, Message
+from subflow.providers.llm.base import (
+    LLMCompletionResult,
+    LLMProvider,
+    LLMUsage,
+    Message,
+    ToolCall,
+    ToolCallResult,
+    ToolDefinition,
+)
 
 if TYPE_CHECKING:
     from subflow.providers.llm.anthropic import AnthropicProvider
@@ -17,6 +25,9 @@ __all__ = [
     "LLMProvider",
     "LLMUsage",
     "Message",
+    "ToolCall",
+    "ToolCallResult",
+    "ToolDefinition",
 ]
 
 

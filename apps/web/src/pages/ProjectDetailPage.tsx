@@ -98,6 +98,40 @@ export default function ProjectDetailPage() {
         return project.current_stage >= 5
     }, [project])
 
+    // 计算项目完成汇总统计
+    const projectSummary = useMemo(() => {
+        if (!project || project.status !== 'completed') return null
+        const runs = project.stage_runs || []
+
+        // 总耗时
+        const totalDurationMs = runs.reduce((acc, r) => acc + (r.duration_ms || 0), 0)
+
+        // 从 LLM 翻译阶段获取段落数和 LLM 统计
+        const llmRun = runs.find(r => r.stage === 'llm')
+        const asrSegments = llmRun?.metrics?.items_total || 0
+        const llmCalls = llmRun?.metrics?.llm_calls_count || 0
+        const promptTokens = llmRun?.metrics?.llm_prompt_tokens || 0
+        const completionTokens = llmRun?.metrics?.llm_completion_tokens || 0
+        const totalTokens = promptTokens + completionTokens
+
+        // 格式化耗时
+        const formatDuration = (ms: number) => {
+            if (ms >= 60000) {
+                const mins = Math.floor(ms / 60000)
+                const secs = Math.floor((ms % 60000) / 1000)
+                return `${mins}m ${secs}s`
+            }
+            return `${(ms / 1000).toFixed(1)}s`
+        }
+
+        return {
+            totalDuration: formatDuration(totalDurationMs),
+            asrSegments,
+            llmCalls,
+            totalTokens,
+        }
+    }, [project])
+
     if (loading && !project) {
         return (
             <div className="flex items-center justify-center py-20">
@@ -256,10 +290,11 @@ export default function ProjectDetailPage() {
             <div className="glass-card p-6 mb-8">
                 <h2 className="text-lg font-semibold mb-4">处理流程</h2>
                 <div className="space-y-3">
-                    {stageOrder.map((s) => {
+                    {stageOrder.map((s, idx) => {
                         const run = latestStageRuns.get(s.name)
                         const status = run?.status || 'pending'
                         const expanded = expandedStage === s.name
+                        const isLast = idx === stageOrder.length - 1
 
                         const stageBaseClass =
                             'border rounded-xl overflow-hidden transition-all border-[--color-border] bg-[rgba(15,23,42,0.4)]'
@@ -272,149 +307,238 @@ export default function ProjectDetailPage() {
                                         ? 'border-[rgba(239,68,68,0.3)] bg-[rgba(239,68,68,0.05)]'
                                         : ''
 
+                        // 连接线样式
+                        const connectorClass = status === 'completed'
+                            ? 'stage-connector stage-connector-completed'
+                            : status === 'running'
+                                ? 'stage-connector stage-connector-running'
+                                : 'stage-connector stage-connector-pending'
+
+                        // 圆点样式
+                        const nodeClass = status === 'completed'
+                            ? 'stage-node stage-node-completed'
+                            : status === 'running'
+                                ? 'stage-node stage-node-running'
+                                : status === 'failed'
+                                    ? 'stage-node stage-node-failed'
+                                    : 'stage-node stage-node-pending'
+
                         return (
-                            <div key={s.name} className={`${stageBaseClass} ${stageStateClass}`}>
-                                <div
-                                    className="flex items-center justify-between px-5 py-4 cursor-pointer transition-colors hover:bg-[--color-bg-hover]"
-                                    onClick={() => setExpandedStage(expanded ? null : s.name)}
-                                >
-                                    <div className="flex items-center gap-3">
-                                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-sm font-medium ${status === 'completed' ? 'bg-[--color-success]/20 text-[--color-success-light]' :
-                                            status === 'running' ? 'bg-[--color-primary]/20 text-[--color-primary-light]' :
-                                                status === 'failed' ? 'bg-[--color-error]/20 text-[--color-error-light]' :
-                                                    'bg-[--color-bg-hover] text-[--color-text-muted]'
-                                            }`}>
-                                            {status === 'completed' ? '✓' : s.index}
+                            <div key={s.name} className="relative">
+                                {/* 连接线 (不在最后一个阶段显示) */}
+                                {!isLast && (
+                                    <div className={connectorClass} />
+                                )}
+                                <div className={`${stageBaseClass} ${stageStateClass}`}>
+                                    <div
+                                        className="flex items-center justify-between px-5 py-4 cursor-pointer transition-colors hover:bg-[--color-bg-hover]"
+                                        onClick={() => setExpandedStage(expanded ? null : s.name)}
+                                    >
+                                        <div className="flex items-center gap-4">
+                                            <div className={nodeClass}>
+                                                {status === 'completed' ? '✓' : s.index}
+                                            </div>
+                                            <div>
+                                                <div className="font-medium">{s.label}</div>
+                                                <div className="text-xs text-[--color-text-muted]">{s.name}</div>
+                                            </div>
                                         </div>
-                                        <div>
-                                            <div className="font-medium">{s.label}</div>
-                                            <div className="text-xs text-[--color-text-muted]">{s.name}</div>
+                                        <div className="flex items-center gap-3">
+                                            {/* 已完成阶段显示耗时 */}
+                                            {status === 'completed' && typeof run?.duration_ms === 'number' && (
+                                                <span className="text-xs text-[--color-text-muted] font-mono">
+                                                    {run.duration_ms >= 60000
+                                                        ? `${Math.floor(run.duration_ms / 60000)}m ${((run.duration_ms % 60000) / 1000).toFixed(0)}s`
+                                                        : `${(run.duration_ms / 1000).toFixed(1)}s`}
+                                                </span>
+                                            )}
+                                            <StatusBadge status={status} size="sm" />
+                                            <svg
+                                                className={`w-4 h-4 text-[--color-text-muted] transition-transform ${expanded ? 'rotate-180' : ''}`}
+                                                fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                                            >
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                                            </svg>
                                         </div>
                                     </div>
-                                    <div className="flex items-center gap-3">
-                                        <StatusBadge status={status} size="sm" />
-                                        <svg
-                                            className={`w-4 h-4 text-[--color-text-muted] transition-transform ${expanded ? 'rotate-180' : ''}`}
-                                            fill="none" stroke="currentColor" viewBox="0 0 24 24"
-                                        >
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                                        </svg>
-                                    </div>
+
+
+                                    {status === 'running' && (
+                                        <div className="px-5 pb-4">
+                                            <div className="progress-bar">
+                                                <div
+                                                    className="progress-bar-fill"
+                                                    style={{ width: `${Math.max(0, Math.min(100, run?.progress ?? 0))}%` }}
+                                                />
+                                            </div>
+                                            <div className="mt-2 text-xs text-[--color-text-muted]">
+                                                {run?.progress_message || '处理中...'} {typeof run?.progress === 'number' ? `(${run.progress}%)` : ''}
+                                            </div>
+                                            {/* 重试状态提示 */}
+                                            {run?.metrics?.retry_status === 'retrying' && (
+                                                <div className="mt-2 flex items-center gap-2 text-xs px-3 py-2 rounded-lg bg-[--color-warning]/10 border border-[--color-warning]/30">
+                                                    <svg className="w-4 h-4 text-[--color-warning-light] animate-spin" fill="none" viewBox="0 0 24 24">
+                                                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                                                    </svg>
+                                                    <span className="text-[--color-warning-light]">
+                                                        自动重试中 ({run.metrics.retry_count}/{run.metrics.retry_max}) - {run.metrics.retry_reason}
+                                                    </span>
+                                                </div>
+                                            )}
+                                            {run?.metrics?.retry_status === 'recovered' && (
+                                                <div className="mt-2 flex items-center gap-2 text-xs px-3 py-2 rounded-lg bg-[--color-success]/10 border border-[--color-success]/30">
+                                                    <svg className="w-4 h-4 text-[--color-success-light]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                                    </svg>
+                                                    <span className="text-[--color-success-light]">重试成功，已自动恢复</span>
+                                                </div>
+                                            )}
+                                            {run?.metrics?.retry_status === 'failed' && (
+                                                <div className="mt-2 flex items-center gap-2 text-xs px-3 py-2 rounded-lg bg-[--color-error]/10 border border-[--color-error]/30">
+                                                    <svg className="w-4 h-4 text-[--color-error-light]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                                                    </svg>
+                                                    <span className="text-[--color-error-light]">重试失败 - {run.metrics.retry_reason}</span>
+                                                </div>
+                                            )}
+                                            {(run?.metrics && (
+                                                <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-[--color-text-muted]">
+                                                    {formatRate(run.metrics.items_per_second, 'items/s') && (
+                                                        <span className="px-2 py-1 rounded-md bg-[--color-bg]/40 border border-[--color-border]">
+                                                            速率: {formatRate(run.metrics.items_per_second, 'items/s')}
+                                                        </span>
+                                                    )}
+                                                    {formatRate(run.metrics.llm_tokens_per_second, 'tokens/s') && (
+                                                        <span className="px-2 py-1 rounded-md bg-[--color-bg]/40 border border-[--color-border]">
+                                                            LLM: {formatRate(run.metrics.llm_tokens_per_second, 'tokens/s')}
+                                                        </span>
+                                                    )}
+                                                    {formatInt(run.metrics.active_tasks) && formatInt(run.metrics.max_concurrent) && (
+                                                        <span className="px-2 py-1 rounded-md bg-[--color-bg]/40 border border-[--color-border]">
+                                                            并发: {formatInt(run.metrics.active_tasks)}/{formatInt(run.metrics.max_concurrent)}
+                                                        </span>
+                                                    )}
+                                                    {formatInt(run.metrics.llm_prompt_tokens) && formatInt(run.metrics.llm_completion_tokens) && (
+                                                        <span className="px-2 py-1 rounded-md bg-[--color-bg]/40 border border-[--color-border]">
+                                                            tokens: {formatInt(run.metrics.llm_prompt_tokens)}/{formatInt(run.metrics.llm_completion_tokens)}
+                                                        </span>
+                                                    )}
+                                                </div>
+                                            )) || null}
+                                        </div>
+                                    )}
+
+                                    {expanded && (
+                                        <div className="px-5 pt-4 pb-5 border-t border-[--color-border] animate-fade-in">
+                                            <div className="grid gap-3 md:grid-cols-2 text-sm">
+                                                <div className="p-3 rounded-lg bg-[--color-bg]/50 border border-[--color-border]">
+                                                    <div className="text-xs text-[--color-text-muted]">开始时间</div>
+                                                    <div className="mt-1 text-xs font-mono">{formatTime(run?.started_at)}</div>
+                                                </div>
+                                                <div className="p-3 rounded-lg bg-[--color-bg]/50 border border-[--color-border]">
+                                                    <div className="text-xs text-[--color-text-muted]">完成时间</div>
+                                                    <div className="mt-1 text-xs font-mono">{formatTime(run?.completed_at)}</div>
+                                                </div>
+                                                <div className="p-3 rounded-lg bg-[--color-bg]/50 border border-[--color-border]">
+                                                    <div className="text-xs text-[--color-text-muted]">耗时</div>
+                                                    <div className="mt-1 text-xs font-mono">
+                                                        {typeof run?.duration_ms === 'number' ? `${(run.duration_ms / 1000).toFixed(2)}s` : '-'}
+                                                    </div>
+                                                </div>
+                                                <div className="p-3 rounded-lg bg-[--color-bg]/50 border border-[--color-border]">
+                                                    <div className="text-xs text-[--color-text-muted]">状态</div>
+                                                    <div className="mt-1 text-xs font-mono">{status}</div>
+                                                </div>
+                                                {run?.metrics && (
+                                                    <div className="md:col-span-2 p-3 rounded-lg bg-[--color-bg]/50 border border-[--color-border]">
+                                                        <div className="text-xs text-[--color-text-muted] mb-2">实时指标</div>
+                                                        <div className="flex flex-wrap gap-2 text-xs font-mono">
+                                                            {typeof run.metrics.items_processed === 'number' && typeof run.metrics.items_total === 'number' && (
+                                                                <span className="px-2 py-1 rounded-md bg-[--color-bg]/40 border border-[--color-border]">
+                                                                    items: {formatInt(run.metrics.items_processed)}/{formatInt(run.metrics.items_total)}
+                                                                </span>
+                                                            )}
+                                                            {formatRate(run.metrics.items_per_second, 'items/s') && (
+                                                                <span className="px-2 py-1 rounded-md bg-[--color-bg]/40 border border-[--color-border]">
+                                                                    items/s: {formatRate(run.metrics.items_per_second, 'items/s')}
+                                                                </span>
+                                                            )}
+                                                            {typeof run.metrics.llm_prompt_tokens === 'number' && typeof run.metrics.llm_completion_tokens === 'number' && (
+                                                                <span className="px-2 py-1 rounded-md bg-[--color-bg]/40 border border-[--color-border]">
+                                                                    prompt/completion: {formatInt(run.metrics.llm_prompt_tokens)}/{formatInt(run.metrics.llm_completion_tokens)}
+                                                                </span>
+                                                            )}
+                                                            {formatRate(run.metrics.llm_tokens_per_second, 'tokens/s') && (
+                                                                <span className="px-2 py-1 rounded-md bg-[--color-bg]/40 border border-[--color-border]">
+                                                                    tokens/s: {formatRate(run.metrics.llm_tokens_per_second, 'tokens/s')}
+                                                                </span>
+                                                            )}
+                                                            {formatInt(run.metrics.active_tasks) && formatInt(run.metrics.max_concurrent) && (
+                                                                <span className="px-2 py-1 rounded-md bg-[--color-bg]/40 border border-[--color-border]">
+                                                                    active: {formatInt(run.metrics.active_tasks)}/{formatInt(run.metrics.max_concurrent)}
+                                                                </span>
+                                                            )}
+                                                            {formatInt(run.metrics.llm_calls_count) && (
+                                                                <span className="px-2 py-1 rounded-md bg-[--color-bg]/40 border border-[--color-border]">
+                                                                    llm_calls: {formatInt(run.metrics.llm_calls_count)}
+                                                                </span>
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                )}
+
+                                                {status === 'failed' && (
+                                                    <div className="md:col-span-2 p-3 rounded-lg bg-[--color-error]/10 border border-[--color-error]/30">
+                                                        <div className="text-xs text-[--color-error-light] font-medium">错误信息</div>
+                                                        <div className="mt-1 text-xs font-mono text-[--color-error-light]">
+                                                            [{run?.error_code || 'UNKNOWN'}] {run?.error_message || run?.error || 'stage failed'}
+                                                        </div>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    )}
                                 </div>
-
-                                {status === 'running' && (
-                                    <div className="px-5 pb-4">
-                                        <div className="progress-bar">
-                                            <div
-                                                className="progress-bar-fill"
-                                                style={{ width: `${Math.max(0, Math.min(100, run?.progress ?? 0))}%` }}
-                                            />
-                                        </div>
-                                        <div className="mt-2 text-xs text-[--color-text-muted]">
-                                            {run?.progress_message || '处理中...'} {typeof run?.progress === 'number' ? `(${run.progress}%)` : ''}
-                                        </div>
-                                        {(run?.metrics && (
-                                            <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-[--color-text-muted]">
-                                                {formatRate(run.metrics.items_per_second, 'items/s') && (
-                                                    <span className="px-2 py-1 rounded-md bg-[--color-bg]/40 border border-[--color-border]">
-                                                        速率: {formatRate(run.metrics.items_per_second, 'items/s')}
-                                                    </span>
-                                                )}
-                                                {formatRate(run.metrics.llm_tokens_per_second, 'tokens/s') && (
-                                                    <span className="px-2 py-1 rounded-md bg-[--color-bg]/40 border border-[--color-border]">
-                                                        LLM: {formatRate(run.metrics.llm_tokens_per_second, 'tokens/s')}
-                                                    </span>
-                                                )}
-                                                {formatInt(run.metrics.active_tasks) && formatInt(run.metrics.max_concurrent) && (
-                                                    <span className="px-2 py-1 rounded-md bg-[--color-bg]/40 border border-[--color-border]">
-                                                        并发: {formatInt(run.metrics.active_tasks)}/{formatInt(run.metrics.max_concurrent)}
-                                                    </span>
-                                                )}
-                                                {formatInt(run.metrics.llm_prompt_tokens) && formatInt(run.metrics.llm_completion_tokens) && (
-                                                    <span className="px-2 py-1 rounded-md bg-[--color-bg]/40 border border-[--color-border]">
-                                                        tokens: {formatInt(run.metrics.llm_prompt_tokens)}/{formatInt(run.metrics.llm_completion_tokens)}
-                                                    </span>
-                                                )}
-                                            </div>
-                                        )) || null}
-                                    </div>
-                                )}
-
-                                {expanded && (
-                                    <div className="px-5 pt-4 pb-5 border-t border-[--color-border] animate-fade-in">
-                                        <div className="grid gap-3 md:grid-cols-2 text-sm">
-                                            <div className="p-3 rounded-lg bg-[--color-bg]/50 border border-[--color-border]">
-                                                <div className="text-xs text-[--color-text-muted]">开始时间</div>
-                                                <div className="mt-1 text-xs font-mono">{formatTime(run?.started_at)}</div>
-                                            </div>
-                                            <div className="p-3 rounded-lg bg-[--color-bg]/50 border border-[--color-border]">
-                                                <div className="text-xs text-[--color-text-muted]">完成时间</div>
-                                                <div className="mt-1 text-xs font-mono">{formatTime(run?.completed_at)}</div>
-                                            </div>
-                                            <div className="p-3 rounded-lg bg-[--color-bg]/50 border border-[--color-border]">
-                                                <div className="text-xs text-[--color-text-muted]">耗时</div>
-                                                <div className="mt-1 text-xs font-mono">
-                                                    {typeof run?.duration_ms === 'number' ? `${(run.duration_ms / 1000).toFixed(2)}s` : '-'}
-                                                </div>
-                                            </div>
-                                            <div className="p-3 rounded-lg bg-[--color-bg]/50 border border-[--color-border]">
-                                                <div className="text-xs text-[--color-text-muted]">状态</div>
-                                                <div className="mt-1 text-xs font-mono">{status}</div>
-                                            </div>
-                                            {run?.metrics && (
-                                                <div className="md:col-span-2 p-3 rounded-lg bg-[--color-bg]/50 border border-[--color-border]">
-                                                    <div className="text-xs text-[--color-text-muted] mb-2">实时指标</div>
-                                                    <div className="flex flex-wrap gap-2 text-xs font-mono">
-                                                        {typeof run.metrics.items_processed === 'number' && typeof run.metrics.items_total === 'number' && (
-                                                            <span className="px-2 py-1 rounded-md bg-[--color-bg]/40 border border-[--color-border]">
-                                                                items: {formatInt(run.metrics.items_processed)}/{formatInt(run.metrics.items_total)}
-                                                            </span>
-                                                        )}
-                                                        {formatRate(run.metrics.items_per_second, 'items/s') && (
-                                                            <span className="px-2 py-1 rounded-md bg-[--color-bg]/40 border border-[--color-border]">
-                                                                items/s: {formatRate(run.metrics.items_per_second, 'items/s')}
-                                                            </span>
-                                                        )}
-                                                        {typeof run.metrics.llm_prompt_tokens === 'number' && typeof run.metrics.llm_completion_tokens === 'number' && (
-                                                            <span className="px-2 py-1 rounded-md bg-[--color-bg]/40 border border-[--color-border]">
-                                                                prompt/completion: {formatInt(run.metrics.llm_prompt_tokens)}/{formatInt(run.metrics.llm_completion_tokens)}
-                                                            </span>
-                                                        )}
-                                                        {formatRate(run.metrics.llm_tokens_per_second, 'tokens/s') && (
-                                                            <span className="px-2 py-1 rounded-md bg-[--color-bg]/40 border border-[--color-border]">
-                                                                tokens/s: {formatRate(run.metrics.llm_tokens_per_second, 'tokens/s')}
-                                                            </span>
-                                                        )}
-                                                        {formatInt(run.metrics.active_tasks) && formatInt(run.metrics.max_concurrent) && (
-                                                            <span className="px-2 py-1 rounded-md bg-[--color-bg]/40 border border-[--color-border]">
-                                                                active: {formatInt(run.metrics.active_tasks)}/{formatInt(run.metrics.max_concurrent)}
-                                                            </span>
-                                                        )}
-                                                        {formatInt(run.metrics.llm_calls_count) && (
-                                                            <span className="px-2 py-1 rounded-md bg-[--color-bg]/40 border border-[--color-border]">
-                                                                llm_calls: {formatInt(run.metrics.llm_calls_count)}
-                                                            </span>
-                                                        )}
-                                                    </div>
-                                                </div>
-                                            )}
-
-                                            {status === 'failed' && (
-                                                <div className="md:col-span-2 p-3 rounded-lg bg-[--color-error]/10 border border-[--color-error]/30">
-                                                    <div className="text-xs text-[--color-error-light] font-medium">错误信息</div>
-                                                    <div className="mt-1 text-xs font-mono text-[--color-error-light]">
-                                                        [{run?.error_code || 'UNKNOWN'}] {run?.error_message || run?.error || 'stage failed'}
-                                                    </div>
-                                                </div>
-                                            )}
-                                        </div>
-                                    </div>
-                                )}
                             </div>
                         )
                     })}
                 </div>
             </div>
+
+            {/* 项目完成汇总统计 */}
+            {projectSummary && (
+                <div className="summary-panel mb-8">
+                    <div className="summary-panel-title">
+                        <svg className="w-5 h-5 text-[--color-success-light]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+                        </svg>
+                        处理完成 - 总览
+                    </div>
+                    <div className="summary-grid">
+                        <div className="summary-item">
+                            <div className="summary-item-label">总耗时</div>
+                            <div className="summary-item-value">{projectSummary.totalDuration}</div>
+                        </div>
+                        <div className="summary-item">
+                            <div className="summary-item-label">ASR 段落</div>
+                            <div className="summary-item-value">{projectSummary.asrSegments} 段</div>
+                        </div>
+                        <div className="summary-item">
+                            <div className="summary-item-label">LLM 调用</div>
+                            <div className="summary-item-value">{projectSummary.llmCalls} 次</div>
+                        </div>
+                        <div className="summary-item">
+                            <div className="summary-item-label">Token 消耗</div>
+                            <div className="summary-item-value">
+                                {projectSummary.totalTokens >= 1000
+                                    ? `${(projectSummary.totalTokens / 1000).toFixed(1)}k`
+                                    : projectSummary.totalTokens}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* Subtitle Export Panel */}
             {projectId && (

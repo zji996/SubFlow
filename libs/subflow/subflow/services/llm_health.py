@@ -19,7 +19,13 @@ from typing import Any, Coroutine, Literal
 
 from redis.asyncio import Redis
 
-from subflow.providers.llm import LLMCompletionResult, LLMProvider, Message
+from subflow.providers.llm import (
+    LLMCompletionResult,
+    LLMProvider,
+    Message,
+    ToolCallResult,
+    ToolDefinition,
+)
 
 
 LLMProfile = Literal["fast", "power"]
@@ -526,6 +532,47 @@ class HealthReportingLLMProvider(LLMProvider):
         started = time.perf_counter()
         try:
             out = await self._inner.complete_json(messages, temperature=temperature)
+        except Exception as exc:
+            latency_ms = int((time.perf_counter() - started) * 1000)
+            _fire_and_forget(
+                self._monitor.report_error(
+                    profile=self._profile,
+                    provider=self._provider,
+                    model=self._model,
+                    latency_ms=latency_ms,
+                    error=str(exc),
+                )
+            )
+            raise
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        _fire_and_forget(
+            self._monitor.report_success(
+                profile=self._profile,
+                provider=self._provider,
+                model=self._model,
+                latency_ms=latency_ms,
+            )
+        )
+        return out
+
+    async def complete_with_tools(
+        self,
+        messages: list[Message],
+        tools: list[ToolDefinition],
+        *,
+        parallel_tool_calls: bool = True,
+        temperature: float = 0.3,
+        max_tokens: int | None = None,
+    ) -> ToolCallResult:
+        started = time.perf_counter()
+        try:
+            out = await self._inner.complete_with_tools(
+                messages,
+                tools,
+                parallel_tool_calls=parallel_tool_calls,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
         except Exception as exc:
             latency_ms = int((time.perf_counter() - started) * 1000)
             _fire_and_forget(

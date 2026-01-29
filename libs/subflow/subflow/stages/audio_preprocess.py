@@ -44,6 +44,8 @@ class AudioPreprocessStage(Stage):
             raise ConfigurationError("project_id/media_url is required")
 
         logger.info("audio_preprocess start (project_id=%s)", run_id)
+        if progress_reporter is not None:
+            await progress_reporter.report(0, "读取媒体文件中...")
 
         blob_store = BlobStore(self.settings)
 
@@ -70,10 +72,14 @@ class AudioPreprocessStage(Stage):
                     move=False,
                 )
                 video_path = Path(ref.path)
+                if progress_reporter is not None:
+                    await progress_reporter.report(30, "读取本地文件完成")
             elif media_url.startswith("http://") or media_url.startswith("https://"):
                 suffix = Path(media_url.split("?")[0]).suffix or ".mp4"
                 video_path = base_dir / f"input{suffix}"
                 try:
+                    if progress_reporter is not None:
+                        await progress_reporter.report(10, "下载视频中...")
                     async with httpx.AsyncClient() as client:
                         async with client.stream("GET", media_url, timeout=600.0) as resp:
                             resp.raise_for_status()
@@ -102,11 +108,17 @@ class AudioPreprocessStage(Stage):
                     move=True,
                 )
                 video_path = Path(ref.path)
+                if progress_reporter is not None:
+                    await progress_reporter.report(30, "下载视频完成")
             else:
                 raise ConfigurationError("Unsupported media_url; provide local path or http(s) url")
 
+        if progress_reporter is not None:
+            await progress_reporter.report(40, "提取音频中...")
         await self.provider.extract_audio(str(video_path), str(audio_path))
         logger.info("extracted audio to %s", audio_path)
+        if progress_reporter is not None:
+            await progress_reporter.report(50, "提取音频完成")
 
         context = cast(PipelineContext, dict(context))
         context["video_path"] = str(video_path)
@@ -135,6 +147,8 @@ class AudioPreprocessStage(Stage):
                     audio_hash,
                     cached_vocals_hash,
                 )
+                if progress_reporter is not None:
+                    await progress_reporter.report(85, "复用缓存人声分离结果")
                 vocals_ref = await blob_store.ingest_hashed_file(
                     project_id=run_id,
                     file_type="vocals",
@@ -147,6 +161,8 @@ class AudioPreprocessStage(Stage):
                 )
 
         if vocals_ref is None:
+            if progress_reporter is not None:
+                await progress_reporter.report(60, "人声分离中...")
             try:
                 vocals_path = await self.provider.separate_vocals(str(audio_path), str(demucs_out))
             except Exception as exc:
@@ -178,6 +194,8 @@ class AudioPreprocessStage(Stage):
                         "or disable via `AUDIO_NORMALIZE=false`.",
                     ) from exc
 
+        if progress_reporter is not None:
+            await progress_reporter.report(95, "保存文件中...")
         audio_ref = await blob_store.ingest_hashed_file(
             project_id=run_id,
             file_type="audio",
@@ -207,4 +225,6 @@ class AudioPreprocessStage(Stage):
         context["audio_path"] = str(audio_ref.path)
         context["vocals_audio_path"] = str(vocals_ref.path)
         logger.info("audio_preprocess done (vocals_audio_path=%s)", vocals_ref.path)
+        if progress_reporter is not None:
+            await progress_reporter.report(100, "音频预处理完成")
         return context
