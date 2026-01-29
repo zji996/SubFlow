@@ -196,6 +196,11 @@ class GreedySentenceASRConfig(BaseSettings):
         gt=0,
         validation_alias=AliasChoices("fallback_chunk_s", "ASR_MAX_CHUNK_S"),
     )
+    max_segment_s: float = Field(
+        default=8.0,
+        gt=0,
+        description="Max segment duration; exceeding triggers clause-level split",
+    )
     vad_search_range_s: float = Field(default=1.0, gt=0)
     vad_valley_threshold: float = Field(default=0.3, ge=0, le=1)
     parallel_gap_s: float = Field(default=2.0, ge=0)
@@ -209,6 +214,20 @@ class GreedySentenceASRConfig(BaseSettings):
                 "GREEDY_SENTENCE_ASR_FALLBACK_CHUNK_S must be >= GREEDY_SENTENCE_ASR_MAX_CHUNK_S"
             )
         return self
+
+
+class MergedChunkConfig(BaseSettings):
+    """Merged chunking configuration for Stage 3/4 (merged ASR windows)."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="MERGED_CHUNK_",
+        env_file=_ENV_FILES,
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    max_segments: int = Field(default=20, ge=1)
+    max_duration_s: float = Field(default=60.0, gt=0)
 
 
 class LoggingSettings(BaseSettings):
@@ -289,6 +308,7 @@ class Settings(BaseSettings):
     # VAD
     vad: VADConfig = VADConfig()
     greedy_sentence_asr: GreedySentenceASRConfig = GreedySentenceASRConfig()
+    merged_chunk: MergedChunkConfig = MergedChunkConfig()
 
     # Logging
     logging: LoggingSettings = LoggingSettings()

@@ -171,6 +171,10 @@ SubFlow 是一个基于语义理解的视频字幕翻译系统。与传统的逐
 │         sentence = "This is great."                                  │
 │         estimated_time = cursor + chunk_duration * char_ratio        │
 │                                                                      │
+│      2b. 【超长句子处理】若没找到句末标点，但有逗号且估计时长          │
+│          超过 max_segment_s（默认 8s），则在逗号处强制切分            │
+│          → 防止说话人连续说 30 秒不带句号导致超长 segment             │
+│                                                                      │
 │      3. VAD Valley 搜索：在 estimated_time ± 1s 找静音点             │
 │         actual_cut_time = find_vad_valley(...)                       │
 │                                                                      │
@@ -184,6 +188,7 @@ SubFlow 是一个基于语义理解的视频字幕翻译系统。与传统的逐
 - 每次 ASR 输入 ≥ 几秒，有足够上下文，**消除短 segment 幻觉**
 - 利用 ASR 输出的标点符号定位句子边界，**保证每段是完整句子**
 - 用 VAD 帧级概率找静音点，**切分点在自然停顿处**
+- `max_segment_s` 限制单 segment 最大时长，**防止超长句子**
 
 **关键理解**：
 
@@ -194,17 +199,22 @@ SubFlow 是一个基于语义理解的视频字幕翻译系统。与传统的逐
 ```env
 GREEDY_SENTENCE_ASR_MAX_CHUNK_S=10.0         # 初始窗口（秒）
 GREEDY_SENTENCE_ASR_FALLBACK_CHUNK_S=15.0    # 扩展窗口（未找到句末标点时）
+GREEDY_SENTENCE_ASR_MAX_SEGMENT_S=8.0        # 单 segment 最大时长，超过则在逗号处强制切分
 GREEDY_SENTENCE_ASR_VAD_SEARCH_RANGE_S=1.0   # VAD valley 搜索范围 ±秒
 GREEDY_SENTENCE_ASR_VAD_VALLEY_THRESHOLD=0.3 # 低于该概率视为 valley（静音）
 GREEDY_SENTENCE_ASR_PARALLEL_GAP_S=2.0       # region gap >= 该值可并行
 GREEDY_SENTENCE_ASR_CLAUSE_ENDINGS=，,、：:—– # 备选切分标点（逗号/顿号/冒号/破折号等）
+
+# Stage 3/4 合并识别 chunk 配置（用于提供更长 ASR 上下文）
+MERGED_CHUNK_MAX_SEGMENTS=20        # 每个 merged chunk 最多包含的 segment 数
+MERGED_CHUNK_MAX_DURATION_S=60.0    # 每个 merged chunk 最大时长（秒，含静音间隔）
 ```
 
 **输入 Artifact**: `vad_regions.json` + `vad_frame_probs` + `vocals.wav`
 **输出 Artifact**:
 - `sentence_segments.json` (句子级 segment，含时间戳)
 - `asr_segments.json` (分段 ASR，用于 Stage 4 纠错)
-- `asr_merged_chunks.json` (合并 ASR，用于 Stage 4 纠错)
+- `asr_merged_chunks.json` (合并 ASR chunks，用于 Stage 4 纠错；可跨 region)
 - `full_transcript.txt`
 
 ---
@@ -239,8 +249,8 @@ Stage 4 处理:
 
 **并行策略（2026-01）**：
 - 纠错任务以 `asr_merged_chunks` 为单位执行
-- `asr_merged_chunks` 的窗口大小由 `GREEDY_SENTENCE_ASR_FALLBACK_CHUNK_S` 控制（默认 15s）
-- 基于 `vad_regions` 的 region gap 进行分区并行，使用 `GREEDY_SENTENCE_ASR_PARALLEL_GAP_S` 配置
+- `asr_merged_chunks` 的窗口大小由 `MERGED_CHUNK_MAX_SEGMENTS` / `MERGED_CHUNK_MAX_DURATION_S` 控制（默认 20 段 / 60s）
+- 不再受 `vad_regions` 边界限制：merged chunk 可跨 region（用于提供更长上下文、减少幻觉）
 - LLM 并发上限按服务类型控制：`CONCURRENCY_LLM_FAST` / `CONCURRENCY_LLM_POWER`
 
 **输入 Artifact**: `sentence_segments.json` + `asr_segments.json` + `asr_merged_chunks.json`  
@@ -316,7 +326,7 @@ Artifact
 | `VOCALS_AUDIO` | 提取的人声音频 | Stage 1 |
 | `VAD_REGIONS` | 语音活动区域列表（存储在 PostgreSQL `vad_segments` 表） | Stage 2 |
 | `ASR_RESULTS` | 带时间戳的识别文本 | Stage 3 |
-| `ASR_MERGED_CHUNKS` | region 内合并识别块列表 | Stage 3 |
+| `ASR_MERGED_CHUNKS` | 合并识别 chunks（可跨 region，用于 Stage 4 对比纠错） | Stage 3 |
 | `FULL_TRANSCRIPT` | 完整转录文本 | Stage 3 |
 | `ASR_CORRECTED_SEGMENTS` | ASR 纠错段落文本 | Stage 4 |
 | `GLOBAL_CONTEXT` | 全局理解结果 | Stage 5.1 |

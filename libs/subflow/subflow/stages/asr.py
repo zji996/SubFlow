@@ -89,6 +89,7 @@ class ASRStage(Stage):
         greedy_cfg = GreedySentenceAlignerConfig(
             max_chunk_s=float(self.settings.greedy_sentence_asr.max_chunk_s),
             fallback_chunk_s=float(self.settings.greedy_sentence_asr.fallback_chunk_s),
+            max_segment_s=float(self.settings.greedy_sentence_asr.max_segment_s),
             vad_search_range_s=float(self.settings.greedy_sentence_asr.vad_search_range_s),
             vad_valley_threshold=float(self.settings.greedy_sentence_asr.vad_valley_threshold),
             sentence_endings=str(self.settings.greedy_sentence_asr.sentence_endings),
@@ -195,9 +196,9 @@ class ASRStage(Stage):
             )
 
             merged_specs = build_merged_chunk_specs(
-                vad_regions,
                 sentence_vad_segments,
-                max_chunk_s=float(self.settings.greedy_sentence_asr.fallback_chunk_s),
+                max_segments=int(self.settings.merged_chunk.max_segments),
+                max_duration_s=float(self.settings.merged_chunk.max_duration_s),
             )
 
             total_tasks = len(segment_paths) + len(merged_specs)
@@ -278,7 +279,7 @@ class ASRStage(Stage):
             context["source_language"] = source_language
             context["sentence_segments"] = sentence_segments
 
-            # 5. Region-merged ASR (<=30s chunks per region)
+            # 5. Merged-chunk ASR (global chunking; can cross VAD region boundaries)
             merged_chunks: list[ASRMergedChunk] = []
             if merged_specs:
                 logger.info(

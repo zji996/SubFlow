@@ -153,11 +153,51 @@ async def get_project_preview_segments(
                 )
             else:
                 await cur.execute(
-                    "SELECT 1 AS one FROM asr_merged_chunks WHERE project_id=%s LIMIT 1",
-                    (project_id,),
+                    """
+                    SELECT MIN(start_time) AS start_time, MAX(end_time) AS end_time
+                    FROM vad_segments
+                    WHERE project_id=%s AND region_id=%s
+                    """,
+                    (project_id, int(region_id)),
                 )
-                has_merged_chunks = await cur.fetchone() is not None
-                if has_merged_chunks:
+                region_row = await cur.fetchone() or {}
+                region_start = region_row.get("start_time")
+                region_end = region_row.get("end_time")
+
+                if region_start is not None and region_end is not None:
+                    # Map VAD region -> ASR segments by time overlap (sentence-aligned ASR segments
+                    # do not share indices with vad_segments.segment_index).
+                    await cur.execute(
+                        """
+                        SELECT COUNT(*) AS c
+                        FROM asr_segments
+                        WHERE project_id=%s
+                          AND start_time < %s
+                          AND end_time > %s
+                        """,
+                        (project_id, float(region_end), float(region_start)),
+                    )
+                    total = int((await cur.fetchone() or {}).get("c") or 0)
+                    await cur.execute(
+                        """
+                        SELECT segment_index, start_time, end_time, text, corrected_text
+                        FROM asr_segments
+                        WHERE project_id=%s
+                          AND start_time < %s
+                          AND end_time > %s
+                        ORDER BY segment_index ASC
+                        LIMIT %s OFFSET %s
+                        """,
+                        (
+                            project_id,
+                            float(region_end),
+                            float(region_start),
+                            int(limit),
+                            int(offset),
+                        ),
+                    )
+                else:
+                    # Legacy fallback: infer mapping via asr_merged_chunks.segment_ids.
                     await cur.execute(
                         """
                         WITH seg_ids AS (
@@ -188,30 +228,6 @@ async def get_project_preview_segments(
                         LIMIT %s OFFSET %s
                         """,
                         (project_id, int(region_id), project_id, int(limit), int(offset)),
-                    )
-                else:
-                    await cur.execute(
-                        """
-                        SELECT COUNT(*) AS c
-                        FROM asr_segments a
-                        JOIN vad_segments v
-                          ON v.project_id=a.project_id AND v.segment_index=a.segment_index
-                        WHERE a.project_id=%s AND v.region_id=%s
-                        """,
-                        (project_id, int(region_id)),
-                    )
-                    total = int((await cur.fetchone() or {}).get("c") or 0)
-                    await cur.execute(
-                        """
-                        SELECT a.segment_index, a.start_time, a.end_time, a.text, a.corrected_text
-                        FROM asr_segments a
-                        JOIN vad_segments v
-                          ON v.project_id=a.project_id AND v.segment_index=a.segment_index
-                        WHERE a.project_id=%s AND v.region_id=%s
-                        ORDER BY a.segment_index ASC
-                        LIMIT %s OFFSET %s
-                        """,
-                        (project_id, int(region_id), int(limit), int(offset)),
                     )
             seg_rows = await cur.fetchall()
 

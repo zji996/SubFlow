@@ -336,7 +336,7 @@ class SemanticChunkingPass(BaseLLMStage):
             1, int(getattr(self.settings.llm_limits, "translation_batch_size", 10) or 10)
         )
         translation_max_tokens = int(
-            getattr(self.settings.llm_limits, "translation_max_tokens", 8192) or 8192
+            getattr(self.settings.llm_limits, "translation_max_tokens", 16384) or 16384
         )
 
         translations: list[SegmentTranslation] = []

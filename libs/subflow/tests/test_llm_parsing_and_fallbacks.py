@@ -40,6 +40,14 @@ def test_parse_id_text_array_raises_on_missing_ids() -> None:
         parse_id_text_array('[{"id": 0, "text": "hi"}]', expected_ids=[0, 1])
 
 
+def test_llm_asr_correction_prompt_mentions_hallucination_rules() -> None:
+    prompt = LLMASRCorrectionStage._get_system_prompt()
+    assert "跨语言幻觉" in prompt
+    assert "主题脱节幻觉" in prompt
+    assert "重复幻觉" in prompt
+    assert "只在【分段识别】出现" in prompt
+
+
 def test_semantic_chunking_batches_extend_to_sentence_endings() -> None:
     segments = [
         ASRSegment(id=0, start=0.0, end=1.0, text="A"),

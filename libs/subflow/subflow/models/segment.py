@@ -42,7 +42,7 @@ class ASRCorrectedSegment:
 
 @dataclass
 class ASRMergedChunk:
-    """Merged ASR chunk within a VAD region (<= ~30s)."""
+    """Merged ASR chunk used for Stage 4 correction (can cross VAD region boundaries)."""
 
     region_id: int
     chunk_id: int

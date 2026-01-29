@@ -24,6 +24,7 @@ class SentenceAlignedSegment:
 class GreedySentenceAlignerConfig:
     max_chunk_s: float = 10.0
     fallback_chunk_s: float = 15.0
+    max_segment_s: float = 8.0  # Max segment duration; exceeding triggers clause-level split
     sentence_endings: str = "。？！；?!;."
     clause_endings: str = "，,、：:—–"
     vad_search_range_s: float = 1.0
@@ -189,12 +190,22 @@ async def greedy_sentence_align_region(
     region_end: float,
     config: GreedySentenceAlignerConfig | None = None,
 ) -> list[SentenceAlignedSegment]:
+    """Greedy sentence-aligned ASR for a single VAD region.
+
+    Key logic (2026-01 enhancement):
+    - Try to find sentence-ending punctuation (。？！；?!;.) in max_chunk_s window
+    - If not found but clause-ending punctuation (，,、：:—–) exists AND
+      estimated segment duration exceeds max_segment_s, split at clause
+    - Otherwise extend to fallback_chunk_s and retry
+    - This prevents super-long segments when speakers talk continuously
+    """
     cfg = config or GreedySentenceAlignerConfig()
     start = float(region_start)
     end = float(region_end)
     if end <= start:
         return []
 
+    max_seg_s = float(cfg.max_segment_s)
     segments: list[SentenceAlignedSegment] = []
     cursor = start
     loops = 0
@@ -213,14 +224,30 @@ async def greedy_sentence_align_region(
             cursor = chunk_end
             continue
 
+        # Step 1: Try to find sentence-ending punctuation
         sentence, _remaining = split_first_sentence(
             text, sentence_endings=str(cfg.sentence_endings)
         )
+
+        # Step 2: If no sentence ending found, try clause ending
+        clause: str = ""
         if not sentence:
             clause, _remaining = split_first_clause(text, clause_endings=str(cfg.clause_endings))
-            if clause:
+
+        # Step 3: Decide whether to use clause or extend window
+        # Key insight: if we have a clause AND the segment would exceed max_segment_s,
+        # prefer splitting at clause rather than extending the window
+        if not sentence and clause:
+            # Estimate clause end time
+            clause_ratio = float(len(clause)) / float(max(1, len(text)))
+            clause_estimated_end = cursor + (chunk_end - cursor) * max(0.0, min(1.0, clause_ratio))
+            segment_duration = clause_estimated_end - cursor
+
+            if segment_duration >= max_seg_s:
+                # Segment would be too long; use clause as split point
                 sentence = clause
 
+        # Step 4: If still no sentence, extend window and retry
         if not sentence and chunk_end < end:
             extended_end = min(cursor + float(cfg.fallback_chunk_s), end)
             if extended_end > chunk_end:
@@ -234,9 +261,12 @@ async def greedy_sentence_align_region(
                         text, clause_endings=str(cfg.clause_endings)
                     )
                     if clause:
+                        # In extended window, always use clause if available
+                        # (already exceeded max_chunk_s)
                         sentence = clause
 
         if not sentence:
+            # No punctuation found at all; output entire chunk
             segments.append(SentenceAlignedSegment(start=cursor, end=chunk_end, text=text))
             cursor = chunk_end
             continue

@@ -9,12 +9,11 @@ import time
 from typing import Any, cast
 
 from subflow.exceptions import ConfigurationError, StageExecutionError
-from subflow.models.segment import ASRCorrectedSegment, ASRMergedChunk, ASRSegment, VADSegment
+from subflow.models.segment import ASRCorrectedSegment, ASRMergedChunk, ASRSegment
 from subflow.pipeline.concurrency import ServiceType, get_concurrency_tracker
 from subflow.pipeline.context import MetricsProgressReporter, PipelineContext, ProgressReporter
 from subflow.providers.llm import Message
 from subflow.stages.base_llm import BaseLLMStage
-from subflow.utils.vad_region_partition import partition_vad_regions_by_gap
 
 logger = logging.getLogger(__name__)
 
@@ -35,8 +34,12 @@ class LLMASRCorrectionStage(BaseLLMStage):
             "- 【分段识别】: 对每小段音频单独识别的结果\n\n"
             "规则：\n"
             "1. 以【完整识别】为参考，纠正【分段识别】中的错误\n"
-            "2. 只纠正听错字（谐音字、漏字、多字）\n"
-            "3. 删除明显的 ASR 幻觉\n"
+            "2. 只纠正听错字（谐音字、漏字、多字），不要改写句子风格\n"
+            "3. 幻觉检测与删除（只删除明显幻觉，不确定就保留）：\n"
+            "   - 跨语言幻觉：中文语境中突然出现完整英文句子（或反之），且与上下文不一致 → 删除\n"
+            "   - 主题脱节幻觉：突然出现与上下文无关的模式化语料（如 “please subscribe/thank you for watching/transcribe/written format”）→ 删除\n"
+            "   - 重复幻觉：同一内容用不同语言重复出现，通常幻觉版本只出现在【分段识别】→ 删除幻觉版本\n"
+            "   - 识别技巧：如果某内容只在【分段识别】出现，但【完整识别】没有 → 高概率是幻觉\n"
             "4. 保持分段边界不变，按 id 返回\n\n"
             "输出 JSON（只输出需要纠正的段落）：\n"
             "[\n"
@@ -152,7 +155,7 @@ class LLMASRCorrectionStage(BaseLLMStage):
                 await progress_reporter.report_metrics(
                     {
                         "progress": 0,
-                        "progress_message": f"纠错中 0/{total_chunks} 区域",
+                        "progress_message": f"纠错中 0/{total_chunks} 块",
                         "items_processed": 0,
                         "items_total": int(total_chunks),
                         "items_per_second": 0.0,
@@ -161,29 +164,13 @@ class LLMASRCorrectionStage(BaseLLMStage):
                     }
                 )
             else:
-                await progress_reporter.report(0, f"纠错中 0/{total_chunks} 区域")
+                await progress_reporter.report(0, f"纠错中 0/{total_chunks} 块")
 
         done_chunks = 0
-        # Use same parallel_gap_s config as Stage 3 greedy sentence ASR
-        parallel_gap_s = float(self.settings.greedy_sentence_asr.parallel_gap_s)
-        vad_regions: list[VADSegment] = list(context.get("vad_regions") or [])
-        partitions = partition_vad_regions_by_gap(
-            vad_regions,
-            min_gap_seconds=parallel_gap_s,
+        ordered_chunks = sorted(
+            merged_chunks,
+            key=lambda c: (float(c.start), float(c.end), int(c.region_id), int(c.chunk_id)),
         )
-        logger.info(
-            "llm_asr_correction region partitions (regions=%d, partitions=%d, min_gap=%.2fs)",
-            len(vad_regions),
-            len(partitions),
-            parallel_gap_s,
-        )
-        chunks_by_region: dict[int, list[ASRMergedChunk]] = {}
-        for c in merged_chunks:
-            chunks_by_region.setdefault(int(c.region_id), []).append(c)
-        ordered_chunks: list[ASRMergedChunk] = []
-        for part in partitions:
-            for rid in part.region_ids():
-                ordered_chunks.extend(chunks_by_region.get(int(rid), []))
         tasks = [asyncio.create_task(_process_chunk(c)) for c in ordered_chunks]
 
         for fut in asyncio.as_completed(tasks):
@@ -219,7 +206,7 @@ class LLMASRCorrectionStage(BaseLLMStage):
                     llm_calls += 1
             if progress_reporter and total_chunks > 0:
                 pct = int(done_chunks / total_chunks * 100)
-                msg = f"纠错中 {done_chunks}/{total_chunks} 区域"
+                msg = f"纠错中 {done_chunks}/{total_chunks} 块"
                 if isinstance(progress_reporter, MetricsProgressReporter):
                     elapsed = max(0.001, time.monotonic() - started_at)
                     state = await tracker.snapshot(service)
