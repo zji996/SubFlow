@@ -249,3 +249,145 @@ async def test_semantic_chunking_reduces_batch_size_on_large_missing(settings) -
     translations = {t.segment_id: t.translation for t in out["segment_translations"]}
     assert translations == {i: f"t{i}" for i in range(10)}
     assert stage.llm.request_sizes == [10, 5, 5]
+
+
+@pytest.mark.asyncio
+async def test_semantic_chunking_skips_missing_single_translation_after_retry(settings) -> None:
+    class _MetricsRecorder:
+        def __init__(self) -> None:
+            self.metrics_calls: list[dict] = []
+
+        async def report(self, progress: int, message: str) -> None:  # noqa: ARG002
+            return None
+
+        async def report_metrics(self, metrics) -> None:  # noqa: ANN001
+            self.metrics_calls.append(dict(metrics or {}))
+
+    class _DummyLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def complete_with_tools(  # noqa: ANN001, ARG002
+            self,
+            messages,
+            tools,
+            *,
+            parallel_tool_calls=True,
+            temperature=0.3,
+            max_tokens=None,
+        ):
+            self.calls += 1
+            if self.calls == 1:
+                tool_calls = [
+                    ToolCall(
+                        id="c0",
+                        name="translate_segment",
+                        arguments={"id": 0, "translation": "t0"},
+                    )
+                ]
+            else:
+                tool_calls = []
+            return ToolCallResult(
+                tool_calls=tool_calls,
+                usage=LLMUsage(prompt_tokens=1, completion_tokens=1),
+            )
+
+    stage = SemanticChunkingPass.__new__(SemanticChunkingPass)
+    stage.settings = settings
+    stage.profile = "power"
+    stage.api_key = "x"
+    stage.llm = _DummyLLM()
+
+    recorder = _MetricsRecorder()
+    out = await stage.execute(
+        {
+            "asr_segments": [
+                ASRSegment(id=0, start=0.0, end=1.0, text="A"),
+                ASRSegment(id=1, start=1.0, end=2.0, text="B"),
+            ],
+            "target_language": "zh",
+            "global_context": {"topic": "x"},
+        },
+        progress_reporter=recorder,
+    )
+
+    translations = {t.segment_id: t.translation for t in out["segment_translations"]}
+    assert translations == {0: "t0", 1: "B"}
+    assert stage.llm.calls == 2
+
+    statuses = [m.get("retry_status") for m in recorder.metrics_calls if "retry_status" in m]
+    assert statuses[:2] == ["retrying", "failed"]
+
+
+@pytest.mark.asyncio
+async def test_semantic_chunking_reports_recovered_when_retry_succeeds(settings) -> None:
+    class _MetricsRecorder:
+        def __init__(self) -> None:
+            self.metrics_calls: list[dict] = []
+
+        async def report(self, progress: int, message: str) -> None:  # noqa: ARG002
+            return None
+
+        async def report_metrics(self, metrics) -> None:  # noqa: ANN001
+            self.metrics_calls.append(dict(metrics or {}))
+
+    class _DummyLLM:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def complete_with_tools(  # noqa: ANN001, ARG002
+            self,
+            messages,
+            tools,
+            *,
+            parallel_tool_calls=True,
+            temperature=0.3,
+            max_tokens=None,
+        ):
+            self.calls += 1
+            if self.calls == 1:
+                tool_calls = [
+                    ToolCall(
+                        id="c0",
+                        name="translate_segment",
+                        arguments={"id": 0, "translation": "t0"},
+                    )
+                ]
+            else:
+                tool_calls = [
+                    ToolCall(
+                        id="c1",
+                        name="translate_segment",
+                        arguments={"id": 1, "translation": "t1"},
+                    )
+                ]
+            return ToolCallResult(
+                tool_calls=tool_calls,
+                usage=LLMUsage(prompt_tokens=1, completion_tokens=1),
+            )
+
+    stage = SemanticChunkingPass.__new__(SemanticChunkingPass)
+    stage.settings = settings
+    stage.profile = "power"
+    stage.api_key = "x"
+    stage.llm = _DummyLLM()
+
+    recorder = _MetricsRecorder()
+    out = await stage.execute(
+        {
+            "asr_segments": [
+                ASRSegment(id=0, start=0.0, end=1.0, text="A"),
+                ASRSegment(id=1, start=1.0, end=2.0, text="B"),
+            ],
+            "target_language": "zh",
+            "global_context": {"topic": "x"},
+        },
+        progress_reporter=recorder,
+    )
+
+    translations = {t.segment_id: t.translation for t in out["segment_translations"]}
+    assert translations == {0: "t0", 1: "t1"}
+    assert stage.llm.calls == 2
+
+    statuses = [m.get("retry_status") for m in recorder.metrics_calls if "retry_status" in m]
+    assert statuses[:2] == ["retrying", "recovered"]

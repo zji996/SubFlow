@@ -78,6 +78,10 @@ export async function runAll(id: string, options?: ApiRequestOptions): Promise<P
     return apiRequest<Project>(`/projects/${id}/run-all`, { ...options, method: 'POST', json: {} })
 }
 
+export async function retryStage(id: string, stage?: StageName, options?: ApiRequestOptions): Promise<Project> {
+    return apiRequest<Project>(`/projects/${id}/retry`, { ...options, method: 'POST', json: stage ? { stage } : {} })
+}
+
 export async function deleteProject(
     id: string,
     options?: ApiRequestOptions,

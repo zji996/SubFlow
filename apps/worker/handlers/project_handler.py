@@ -80,7 +80,7 @@ async def process_project_task(task: dict[str, Any], redis: Redis, settings: Set
                     start_index = 0
             for s in stage_order[start_index:]:
                 project, _ = await orchestrator.run_stage(project, s)
-        elif typ == "run_stage":
+        elif typ == "run_stage" or typ == "retry_stage":
             stage_raw = task.get("stage")
             if not stage_raw:
                 return

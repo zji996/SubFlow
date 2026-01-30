@@ -20,7 +20,7 @@ from subflow.models.project import (
 )
 from subflow.models.segment import ASRCorrectedSegment
 from subflow.pipeline.context import PipelineContext, ProgressReporter, StageMetrics
-from subflow.pipeline.stage_runners import RUNNERS
+from subflow.pipeline.stage_runners import RUNNERS, RunnerContext, StageRunner
 from subflow.repositories import (
     ASRMergedChunkRepository,
     ASRSegmentRepository,
@@ -290,6 +290,66 @@ class PipelineOrchestrator:
                 return
         project.stage_runs.append(stage_run)
 
+    async def reset_stage_for_retry(self, project: Project, stage: StageName) -> Project:
+        """Reset a failed stage so it can be re-executed.
+
+        Behavior:
+        - Validate the requested stage has a failed StageRun
+        - Roll back project.current_stage to the stage's previous index
+        - Clear data produced by the stage and all subsequent stages
+        - Reset affected StageRuns back to pending
+        - Set project.status back to processing (and clear error_message)
+        """
+        if stage not in _STAGE_INDEX:
+            raise ValueError(f"Unknown stage: {stage}")
+
+        db_project = await self.project_repo.get(project.id)
+        if db_project is None:
+            raise ValueError("project not found")
+
+        stage_runs = await self.stage_run_repo.list_by_project(db_project.id)
+        by_stage: dict[StageName, StageRun] = {sr.stage: sr for sr in list(stage_runs or [])}
+        target_run = by_stage.get(stage)
+        if target_run is None or target_run.status != StageRunStatus.FAILED:
+            raise ValueError(f"stage not failed: {stage.value}")
+
+        target_index = _STAGE_INDEX[stage]
+        rollback_stage = max(0, target_index - 1)
+        db_project.current_stage = min(int(db_project.current_stage), rollback_stage)
+
+        stages_to_reset = [s for s in _STAGE_ORDER if _STAGE_INDEX[s] >= target_index]
+        for s in stages_to_reset:
+            if s == StageName.AUDIO_PREPROCESS:
+                await self.project_repo.update_media_files(db_project.id, {})
+                db_project.media_files = {}
+            elif s == StageName.VAD:
+                await self.vad_repo.delete_by_project(db_project.id)
+            elif s == StageName.ASR:
+                await self.asr_repo.delete_by_project(db_project.id)
+                await self.asr_merged_chunk_repo.delete_by_project(db_project.id)
+            elif s == StageName.LLM_ASR_CORRECTION:
+                await self.asr_repo.clear_corrected_texts(db_project.id)
+            elif s == StageName.LLM:
+                delete_ctx = getattr(self.global_context_repo, "delete_by_project", None) or getattr(
+                    self.global_context_repo, "delete", None
+                )
+                if delete_ctx is not None:
+                    await delete_ctx(db_project.id)
+                await self.semantic_chunk_repo.delete_by_project(db_project.id)
+
+            await self.stage_run_repo.reset_to_pending(db_project.id, s.value)
+
+        db_project.status = ProjectStatus.PROCESSING
+        await self.project_repo.update_status(
+            db_project.id,
+            ProjectStatus.PROCESSING.value,
+            current_stage=db_project.current_stage,
+            error_message=None,
+        )
+        db_project.stage_runs = await self.stage_run_repo.list_by_project(db_project.id)
+        await self._notify_update(db_project)
+        return db_project
+
     async def run_stage(
         self, project: Project, stage: StageName
     ) -> tuple[Project, PipelineContext]:
@@ -300,6 +360,15 @@ class PipelineOrchestrator:
             raise StageExecutionError(stage.value, "project not found", project_id=project.id)
         project = db_project
         project.stage_runs = await self.stage_run_repo.list_by_project(project.id)
+
+        existing = next((sr for sr in list(project.stage_runs or []) if sr.stage == stage), None)
+        if existing is not None and existing.status == StageRunStatus.FAILED:
+            logger.info(
+                "orchestrator reset failed stage for retry (project_id=%s, stage=%s)",
+                project.id,
+                stage.value,
+            )
+            project = await self.reset_stage_for_retry(project, stage)
 
         target_index = _STAGE_INDEX[stage]
         if project.current_stage >= target_index:
@@ -349,7 +418,7 @@ class PipelineOrchestrator:
                     stage_run=run,
                     notify_update=_notify_progress,
                 )
-                ctx, artifacts = await runner.run(
+                runner_ctx = RunnerContext(
                     settings=self.settings,
                     store=self.store,
                     project_repo=self.project_repo,
@@ -359,9 +428,27 @@ class PipelineOrchestrator:
                     global_context_repo=self.global_context_repo,
                     semantic_chunk_repo=self.semantic_chunk_repo,
                     project=project,
-                    ctx=ctx,
-                    progress_reporter=progress_reporter,
                 )
+                if isinstance(runner, StageRunner):
+                    ctx, artifacts = await runner.run(
+                        runner_ctx=runner_ctx,
+                        ctx=ctx,
+                        progress_reporter=progress_reporter,
+                    )
+                else:
+                    ctx, artifacts = await runner.run(
+                        settings=self.settings,
+                        store=self.store,
+                        project_repo=self.project_repo,
+                        vad_repo=self.vad_repo,
+                        asr_repo=self.asr_repo,
+                        asr_merged_chunk_repo=self.asr_merged_chunk_repo,
+                        global_context_repo=self.global_context_repo,
+                        semantic_chunk_repo=self.semantic_chunk_repo,
+                        project=project,
+                        ctx=ctx,
+                        progress_reporter=progress_reporter,
+                    )
                 run.output_artifacts = dict(artifacts)
 
                 project.current_stage = idx

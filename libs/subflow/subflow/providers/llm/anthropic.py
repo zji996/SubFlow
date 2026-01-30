@@ -9,11 +9,9 @@ from typing import Any
 
 import anthropic
 from tenacity import (
-    RetryCallState,
     retry,
     retry_if_exception_type,
     stop_after_attempt,
-    wait_exponential,
 )
 
 from subflow.error_codes import ErrorCode
@@ -27,52 +25,13 @@ from subflow.providers.llm.base import (
     ToolCallResult,
     ToolDefinition,
 )
+from subflow.providers.llm._retry import RetryableLLMError, log_retry, wait_retry
+from subflow.providers.llm._utils import build_usage, log_llm_call, parse_json_from_markdown
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com"
 DEFAULT_MAX_TOKENS = 4096
-
-_WAIT_NORMAL = wait_exponential(min=1, max=10)
-_WAIT_RATE_LIMIT = wait_exponential(min=2, max=30)
-
-
-class _RetryableLLMError(ProviderError):
-    def __init__(
-        self,
-        provider: str,
-        message: str,
-        *,
-        rate_limited: bool = False,
-        error_code: ErrorCode | str | None = None,
-    ) -> None:
-        super().__init__(provider, message, error_code=error_code)
-        self.rate_limited = rate_limited
-
-
-def _wait_retry(state: RetryCallState) -> float:
-    exc = state.outcome.exception() if state.outcome else None
-    if isinstance(exc, _RetryableLLMError) and exc.rate_limited:
-        return _WAIT_RATE_LIMIT(state)
-    return _WAIT_NORMAL(state)
-
-
-def _log_retry(state: RetryCallState) -> None:
-    exc = state.outcome.exception() if state.outcome else None
-    provider = "llm"
-    model = None
-    if state.args:
-        provider = getattr(state.args[0], "provider", provider)
-        model = getattr(state.args[0], "model", None)
-    wait_s = state.next_action.sleep if state.next_action else None
-    logger.warning(
-        "llm retrying (provider=%s, model=%s, attempt=%s, wait_s=%s, error=%s)",
-        provider,
-        model,
-        state.attempt_number,
-        wait_s,
-        exc,
-    )
 
 
 def _split_system_messages(messages: list[Message]) -> tuple[str | None, list[Message]]:
@@ -128,10 +87,10 @@ class AnthropicProvider(LLMProvider):
         )
 
     @retry(
-        retry=retry_if_exception_type(_RetryableLLMError),
+        retry=retry_if_exception_type(RetryableLLMError),
         stop=stop_after_attempt(3),
-        wait=_wait_retry,
-        before_sleep=_log_retry,
+        wait=wait_retry,
+        before_sleep=log_retry(logger),
         reraise=True,
     )
     async def _messages(
@@ -168,7 +127,7 @@ class AnthropicProvider(LLMProvider):
 
         except anthropic.RateLimitError as exc:
             logger.warning("llm rate limited: %s", exc)
-            raise _RetryableLLMError(
+            raise RetryableLLMError(
                 self.provider,
                 str(exc),
                 rate_limited=True,
@@ -178,7 +137,7 @@ class AnthropicProvider(LLMProvider):
             # 5xx errors are retryable
             if exc.status_code >= 500:
                 logger.warning("llm server error: %s", exc)
-                raise _RetryableLLMError(
+                raise RetryableLLMError(
                     self.provider,
                     str(exc),
                     error_code=ErrorCode.LLM_FAILED,
@@ -192,40 +151,27 @@ class AnthropicProvider(LLMProvider):
             ) from exc
         except anthropic.APIConnectionError as exc:
             logger.warning("llm connection error: %s", exc)
-            raise _RetryableLLMError(
+            raise RetryableLLMError(
                 self.provider,
                 str(exc),
                 error_code=ErrorCode.LLM_TIMEOUT,
             ) from exc
         except anthropic.APITimeoutError as exc:
             logger.warning("llm timeout: %s", exc)
-            raise _RetryableLLMError(
+            raise RetryableLLMError(
                 self.provider,
                 str(exc),
                 error_code=ErrorCode.LLM_TIMEOUT,
             ) from exc
 
         latency_ms = int((time.perf_counter() - started) * 1000)
-        usage_parsed: LLMUsage | None = None
-        if usage_prompt is not None or usage_completion is not None:
-            total = (
-                (usage_prompt or 0) + (usage_completion or 0)
-                if usage_prompt is not None and usage_completion is not None
-                else None
-            )
-            usage_parsed = LLMUsage(
-                prompt_tokens=usage_prompt,
-                completion_tokens=usage_completion,
-                total_tokens=total,
-            )
-        logger.info(
-            "llm call (provider=%s, model=%s, latency_ms=%s, prompt_tokens=%s, completion_tokens=%s, total_tokens=%s)",
-            self.provider,
-            self.model,
-            latency_ms,
-            getattr(usage_parsed, "prompt_tokens", None),
-            getattr(usage_parsed, "completion_tokens", None),
-            getattr(usage_parsed, "total_tokens", None),
+        usage_parsed = build_usage(usage_prompt, usage_completion)
+        log_llm_call(
+            logger,
+            provider=self.provider,
+            model=self.model,
+            latency_ms=latency_ms,
+            usage=usage_parsed,
         )
 
         return "".join(text_chunks), usage_parsed, latency_ms
@@ -272,22 +218,15 @@ class AnthropicProvider(LLMProvider):
 
         text = await self.complete(json_messages, temperature=temperature)
         try:
-            if "```json" in text:
-                text = text.split("```json")[1].split("```")[0]
-            elif "```" in text:
-                text = text.split("```")[1].split("```")[0]
-            data = json.loads(text.strip())
-            if not isinstance(data, dict):
-                raise ValueError(f"Expected JSON object, got {type(data).__name__}")
-            return data
+            return parse_json_from_markdown(text)
         except json.JSONDecodeError as exc:
             raise ValueError(f"Failed to parse JSON response: {exc}") from exc
 
     @retry(
-        retry=retry_if_exception_type(_RetryableLLMError),
+        retry=retry_if_exception_type(RetryableLLMError),
         stop=stop_after_attempt(3),
-        wait=_wait_retry,
-        before_sleep=_log_retry,
+        wait=wait_retry,
+        before_sleep=log_retry(logger),
         reraise=True,
     )
     async def _messages_with_tools(
@@ -326,7 +265,7 @@ class AnthropicProvider(LLMProvider):
             )
         except anthropic.RateLimitError as exc:
             logger.warning("llm rate limited: %s", exc)
-            raise _RetryableLLMError(
+            raise RetryableLLMError(
                 self.provider,
                 str(exc),
                 rate_limited=True,
@@ -337,7 +276,7 @@ class AnthropicProvider(LLMProvider):
                 raise NotImplementedError(str(exc)) from exc
             if exc.status_code >= 500:
                 logger.warning("llm server error: %s", exc)
-                raise _RetryableLLMError(
+                raise RetryableLLMError(
                     self.provider,
                     str(exc),
                     error_code=ErrorCode.LLM_FAILED,
@@ -350,34 +289,27 @@ class AnthropicProvider(LLMProvider):
             ) from exc
         except anthropic.APIConnectionError as exc:
             logger.warning("llm connection error: %s", exc)
-            raise _RetryableLLMError(
+            raise RetryableLLMError(
                 self.provider,
                 str(exc),
                 error_code=ErrorCode.LLM_TIMEOUT,
             ) from exc
         except anthropic.APITimeoutError as exc:
             logger.warning("llm timeout: %s", exc)
-            raise _RetryableLLMError(
+            raise RetryableLLMError(
                 self.provider,
                 str(exc),
                 error_code=ErrorCode.LLM_TIMEOUT,
             ) from exc
 
         latency_ms = int((time.perf_counter() - started) * 1000)
-        usage_parsed: LLMUsage | None = None
         usage = getattr(response, "usage", None)
         prompt_tokens = getattr(usage, "input_tokens", None)
         completion_tokens = getattr(usage, "output_tokens", None)
-        if isinstance(prompt_tokens, int) or isinstance(completion_tokens, int):
-            usage_parsed = LLMUsage(
-                prompt_tokens=int(prompt_tokens) if isinstance(prompt_tokens, int) else None,
-                completion_tokens=int(completion_tokens)
-                if isinstance(completion_tokens, int)
-                else None,
-                total_tokens=int(prompt_tokens + completion_tokens)
-                if isinstance(prompt_tokens, int) and isinstance(completion_tokens, int)
-                else None,
-            )
+        usage_parsed = build_usage(
+            int(prompt_tokens) if isinstance(prompt_tokens, int) else None,
+            int(completion_tokens) if isinstance(completion_tokens, int) else None,
+        )
 
         tool_calls: list[ToolCall] = []
         from subflow.utils.json_repair import parse_tool_arguments_safe
@@ -404,15 +336,13 @@ class AnthropicProvider(LLMProvider):
                 continue
             tool_calls.append(ToolCall(id=call_id, name=name, arguments=args))
 
-        logger.info(
-            "llm tool call (provider=%s, model=%s, latency_ms=%s, tool_calls=%s, prompt_tokens=%s, completion_tokens=%s, total_tokens=%s)",
-            self.provider,
-            self.model,
-            latency_ms,
-            len(tool_calls),
-            getattr(usage_parsed, "prompt_tokens", None),
-            getattr(usage_parsed, "completion_tokens", None),
-            getattr(usage_parsed, "total_tokens", None),
+        log_llm_call(
+            logger,
+            provider=self.provider,
+            model=self.model,
+            latency_ms=latency_ms,
+            usage=usage_parsed,
+            tool_calls=len(tool_calls),
         )
         return tool_calls, usage_parsed, latency_ms
 

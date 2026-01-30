@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
     deleteProject,
     getProject,
+    retryStage,
     runAll,
     runStage,
     type Project,
@@ -40,23 +41,36 @@ export default function ProjectDetailPage() {
         return getProject(projectId, { signal })
     }, [projectId])
 
-    const { data: project, loading, error } = usePolling<Project>({
+    const { data: project, loading, error, refetch } = usePolling<Project>({
         fetcher,
         interval: 5000, // 5 seconds - balanced between responsiveness and server load
         enabled: !!projectId,
-        shouldStop: (data) => data.status === 'completed' || data.status === 'failed',
+        shouldStop: (data) => data.status === 'completed',
     })
 
     const handleRunNext = async () => {
         if (!projectId || !project) return
+        if (project.status === 'failed' && failedStage) {
+            await retryStage(projectId, failedStage.name)
+            refetch()
+            return
+        }
         const s = nextStage(project.current_stage)
         if (!s) return
         await runStage(projectId, s)
+        refetch()
     }
 
     const handleRunAll = async () => {
         if (!projectId) return
         await runAll(projectId)
+        refetch()
+    }
+
+    const handleRetry = async (stage?: StageName) => {
+        if (!projectId) return
+        await retryStage(projectId, stage)
+        refetch()
     }
 
     const handleDelete = async () => {
@@ -74,6 +88,10 @@ export default function ProjectDetailPage() {
         }
         return out
     }, [project])
+
+    const failedStage = useMemo(() => {
+        return stageOrder.find((s) => latestStageRuns.get(s.name)?.status === 'failed') || null
+    }, [latestStageRuns])
 
     const formatTime = (iso?: string | null) => {
         if (!iso) return '-'
@@ -256,6 +274,19 @@ export default function ProjectDetailPage() {
                     </div>
                 ) : (
                     <div className="flex flex-wrap gap-3">
+                        {project.status === 'failed' && failedStage && (
+                            <button
+                                onClick={() => handleRetry(failedStage.name)}
+                                disabled={project.status === 'processing'}
+                                className="btn-warning"
+                            >
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v6h6M20 20v-6h-6" />
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 11a8 8 0 00-14.9-3M4 13a8 8 0 0014.9 3" />
+                                </svg>
+                                重试 {failedStage.label}
+                            </button>
+                        )}
                         <button
                             onClick={handleRunNext}
                             disabled={project.status === 'processing'}

@@ -44,6 +44,9 @@ class _InMemoryProjectRepo:
     async def get(self, project_id: str) -> Project | None:  # noqa: ARG002
         return self.project
 
+    async def update_media_files(self, project_id: str, media_files: dict[str, object]) -> None:  # noqa: ARG002
+        self.project.media_files = dict(media_files or {})
+
     async def update_status(
         self,
         project_id: str,  # noqa: ARG002
@@ -87,12 +90,45 @@ class _InMemoryStageRunRepo:
         return None
 
     async def mark_completed(self, project_id: str, stage: str, metadata=None):  # noqa: ANN001, ARG002
-        return None
+        from subflow.models.project import StageRun, StageRunStatus
+
+        sr = self.stage_runs.get((project_id, stage))
+        if isinstance(sr, StageRun):
+            sr.status = StageRunStatus.COMPLETED
+            return sr
+        sr2 = StageRun(stage=StageName(stage), status=StageRunStatus.COMPLETED)
+        self.stage_runs[(project_id, stage)] = sr2
+        return sr2
 
     async def mark_failed(
         self, project_id: str, stage: str, error_code: str, error_message: str, *, metadata=None
     ):  # noqa: ANN001, ARG002
-        return None
+        from subflow.models.project import StageRun, StageRunStatus
+
+        sr = self.stage_runs.get((project_id, stage))
+        if isinstance(sr, StageRun):
+            sr.status = StageRunStatus.FAILED
+            return sr
+        sr2 = StageRun(stage=StageName(stage), status=StageRunStatus.FAILED)
+        self.stage_runs[(project_id, stage)] = sr2
+        return sr2
+
+    async def reset_to_pending(self, project_id: str, stage: str):  # noqa: ANN001
+        from subflow.models.project import StageRun, StageRunStatus
+
+        sr = self.stage_runs.get((project_id, stage))
+        if isinstance(sr, StageRun):
+            sr.status = StageRunStatus.PENDING
+            sr.started_at = None
+            sr.completed_at = None
+            sr.error_message = None
+            sr.metrics = {}
+            sr.output_artifacts = {}
+            sr.input_artifacts = {}
+            return sr
+        sr2 = StageRun(stage=StageName(stage), status=StageRunStatus.PENDING)
+        self.stage_runs[(project_id, stage)] = sr2
+        return sr2
 
 
 class _NoopRepo:
@@ -103,6 +139,9 @@ class _NoopRepo:
         return None
 
     async def update_corrected_texts(self, project_id: str, corrections):  # noqa: ANN001, ARG002
+        return None
+
+    async def clear_corrected_texts(self, project_id: str) -> None:  # noqa: ARG002
         return None
 
     async def get_by_project(self, project_id: str, **kwargs):  # noqa: ANN001, ARG002
@@ -269,3 +308,76 @@ async def test_orchestrator_error_sets_failed_status_and_error_code(settings, mo
         await orch.run_stage(project, StageName.ASR)
     assert project.status == ProjectStatus.FAILED
     assert project.stage_runs[-1].error_code == ErrorCode.ASR_FAILED.value
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_retry_resets_failed_stage_and_clears_downstream_data(
+    settings, monkeypatch
+) -> None:
+    store = InMemoryArtifactStore()
+    project = Project(id="proj_retry", name="demo", media_url="u", target_language="zh")
+    project.current_stage = 3
+    project_repo = _InMemoryProjectRepo(project)
+    stage_run_repo = _InMemoryStageRunRepo()
+
+    from subflow.models.project import StageRun, StageRunStatus
+
+    stage_run_repo.stage_runs[(project.id, StageName.ASR.value)] = StageRun(
+        stage=StageName.ASR, status=StageRunStatus.FAILED
+    )
+    stage_run_repo.stage_runs[(project.id, StageName.LLM.value)] = StageRun(
+        stage=StageName.LLM, status=StageRunStatus.COMPLETED
+    )
+
+    class _SpyRepo(_NoopRepo):
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        async def delete_by_project(self, project_id: str) -> None:  # noqa: ARG002
+            self.calls.append("delete_by_project")
+
+        async def clear_corrected_texts(self, project_id: str) -> None:  # noqa: ARG002
+            self.calls.append("clear_corrected_texts")
+
+        async def delete(self, project_id: str) -> None:  # noqa: ARG002
+            self.calls.append("delete")
+
+    vad_repo = _SpyRepo()
+    asr_repo = _SpyRepo()
+    asr_merged_repo = _SpyRepo()
+    global_ctx_repo = _SpyRepo()
+    semantic_repo = _SpyRepo()
+
+    orch = PipelineOrchestrator(
+        settings,
+        store,
+        project_repo=project_repo,
+        stage_run_repo=stage_run_repo,
+        vad_repo=vad_repo,
+        asr_repo=asr_repo,
+        asr_merged_chunk_repo=asr_merged_repo,
+        global_context_repo=global_ctx_repo,
+        semantic_chunk_repo=semantic_repo,
+    )
+
+    fake_runners = {StageName.ASR: _Runner(stage=StageName.ASR)}
+    monkeypatch.setattr("subflow.pipeline.orchestrator.RUNNERS", fake_runners, raising=False)
+
+    out_project, _ = await orch.run_stage(project, StageName.ASR)
+    assert out_project.current_stage == 3
+    assert out_project.status == ProjectStatus.PROCESSING
+
+    assert "delete_by_project" not in vad_repo.calls
+    assert "delete_by_project" in asr_repo.calls
+    assert "delete_by_project" in asr_merged_repo.calls
+    assert "delete_by_project" in global_ctx_repo.calls
+    assert "delete_by_project" in semantic_repo.calls
+    assert "clear_corrected_texts" in asr_repo.calls
+
+    sr_asr = stage_run_repo.stage_runs[(project.id, StageName.ASR.value)]
+    assert isinstance(sr_asr, StageRun)
+    assert sr_asr.status == StageRunStatus.COMPLETED
+
+    sr_llm = stage_run_repo.stage_runs[(project.id, StageName.LLM.value)]
+    assert isinstance(sr_llm, StageRun)
+    assert sr_llm.status == StageRunStatus.PENDING

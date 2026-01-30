@@ -10,11 +10,9 @@ from typing import Any
 
 import httpx
 from tenacity import (
-    RetryCallState,
     retry,
     retry_if_exception_type,
     stop_after_attempt,
-    wait_exponential,
 )
 
 from subflow.error_codes import ErrorCode
@@ -28,51 +26,12 @@ from subflow.providers.llm.base import (
     ToolCallResult,
     ToolDefinition,
 )
+from subflow.providers.llm._retry import RetryableLLMError, log_retry, wait_retry
+from subflow.providers.llm._utils import log_llm_call, parse_json_from_markdown
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
-
-_WAIT_NORMAL = wait_exponential(min=1, max=10)
-_WAIT_RATE_LIMIT = wait_exponential(min=2, max=30)
-
-
-class _RetryableLLMError(ProviderError):
-    def __init__(
-        self,
-        provider: str,
-        message: str,
-        *,
-        rate_limited: bool = False,
-        error_code: ErrorCode | str | None = None,
-    ) -> None:
-        super().__init__(provider, message, error_code=error_code)
-        self.rate_limited = rate_limited
-
-
-def _wait_retry(state: RetryCallState) -> float:
-    exc = state.outcome.exception() if state.outcome else None
-    if isinstance(exc, _RetryableLLMError) and exc.rate_limited:
-        return _WAIT_RATE_LIMIT(state)
-    return _WAIT_NORMAL(state)
-
-
-def _log_retry(state: RetryCallState) -> None:
-    exc = state.outcome.exception() if state.outcome else None
-    provider = "llm"
-    model = None
-    if state.args:
-        provider = getattr(state.args[0], "provider", provider)
-        model = getattr(state.args[0], "model", None)
-    wait_s = state.next_action.sleep if state.next_action else None
-    logger.warning(
-        "llm retrying (provider=%s, model=%s, attempt=%s, wait_s=%s, error=%s)",
-        provider,
-        model,
-        state.attempt_number,
-        wait_s,
-        exc,
-    )
 
 
 async def _iter_sse_data(response: httpx.Response) -> AsyncIterator[str]:
@@ -179,10 +138,10 @@ class OpenAICompatProvider(LLMProvider):
         )
 
     @retry(
-        retry=retry_if_exception_type(_RetryableLLMError),
+        retry=retry_if_exception_type(RetryableLLMError),
         stop=stop_after_attempt(3),
-        wait=_wait_retry,
-        before_sleep=_log_retry,
+        wait=wait_retry,
+        before_sleep=log_retry(logger),
         reraise=True,
     )
     async def _chat_completions(
@@ -215,7 +174,7 @@ class OpenAICompatProvider(LLMProvider):
                     body = await response.aread()
                     message = _format_http_error(response, body)
                     if response.status_code == 429 or response.status_code >= 500:
-                        raise _RetryableLLMError(
+                        raise RetryableLLMError(
                             self.provider,
                             message,
                             rate_limited=response.status_code == 429,
@@ -257,14 +216,14 @@ class OpenAICompatProvider(LLMProvider):
                         text_chunks.append(content)
         except httpx.TimeoutException as exc:
             logger.warning("llm request timeout: %s", exc)
-            raise _RetryableLLMError(
+            raise RetryableLLMError(
                 self.provider,
                 str(exc),
                 error_code=ErrorCode.LLM_TIMEOUT,
             ) from exc
         except httpx.TransportError as exc:
             logger.warning("llm request failed: %s", exc)
-            raise _RetryableLLMError(
+            raise RetryableLLMError(
                 self.provider,
                 str(exc),
                 error_code=ErrorCode.LLM_FAILED,
@@ -272,24 +231,22 @@ class OpenAICompatProvider(LLMProvider):
 
         latency_ms = int((time.perf_counter() - started) * 1000)
         usage_parsed = usage_from_header or self._parse_usage(last_event)
-        logger.info(
-            "llm call (provider=%s, model=%s, latency_ms=%s, prompt_tokens=%s, completion_tokens=%s, total_tokens=%s)",
-            self.provider,
-            self.model,
-            latency_ms,
-            getattr(usage_parsed, "prompt_tokens", None),
-            getattr(usage_parsed, "completion_tokens", None),
-            getattr(usage_parsed, "total_tokens", None),
+        log_llm_call(
+            logger,
+            provider=self.provider,
+            model=self.model,
+            latency_ms=latency_ms,
+            usage=usage_parsed,
         )
 
         text = "".join(text_chunks)
         return text, usage_parsed, latency_ms
 
     @retry(
-        retry=retry_if_exception_type(_RetryableLLMError),
+        retry=retry_if_exception_type(RetryableLLMError),
         stop=stop_after_attempt(3),
-        wait=_wait_retry,
-        before_sleep=_log_retry,
+        wait=wait_retry,
+        before_sleep=log_retry(logger),
         reraise=True,
     )
     async def _chat_completions_with_tools(
@@ -346,7 +303,7 @@ class OpenAICompatProvider(LLMProvider):
                     if response.status_code == 400 and _looks_like_tool_use_unsupported(message):
                         raise NotImplementedError(message)
                     if response.status_code == 429 or response.status_code >= 500:
-                        raise _RetryableLLMError(
+                        raise RetryableLLMError(
                             self.provider,
                             message,
                             rate_limited=response.status_code == 429,
@@ -430,14 +387,14 @@ class OpenAICompatProvider(LLMProvider):
                     raise
         except httpx.TimeoutException as exc:
             logger.warning("llm request timeout: %s", exc)
-            raise _RetryableLLMError(
+            raise RetryableLLMError(
                 self.provider,
                 str(exc),
                 error_code=ErrorCode.LLM_TIMEOUT,
             ) from exc
         except httpx.TransportError as exc:
             logger.warning("llm request failed: %s", exc)
-            raise _RetryableLLMError(
+            raise RetryableLLMError(
                 self.provider,
                 str(exc),
                 error_code=ErrorCode.LLM_FAILED,
@@ -469,15 +426,13 @@ class OpenAICompatProvider(LLMProvider):
                 continue
             parsed_calls.append(ToolCall(id=call_id, name=name, arguments=args))
 
-        logger.info(
-            "llm tool call (provider=%s, model=%s, latency_ms=%s, tool_calls=%s, prompt_tokens=%s, completion_tokens=%s, total_tokens=%s)",
-            self.provider,
-            self.model,
-            latency_ms,
-            len(parsed_calls),
-            getattr(usage_parsed, "prompt_tokens", None),
-            getattr(usage_parsed, "completion_tokens", None),
-            getattr(usage_parsed, "total_tokens", None),
+        log_llm_call(
+            logger,
+            provider=self.provider,
+            model=self.model,
+            latency_ms=latency_ms,
+            usage=usage_parsed,
+            tool_calls=len(parsed_calls),
         )
 
         return parsed_calls, usage_parsed, latency_ms
@@ -526,17 +481,9 @@ class OpenAICompatProvider(LLMProvider):
 
         # Parse JSON from response
         try:
-            # Handle markdown code blocks
-            if "```json" in text:
-                text = text.split("```json")[1].split("```")[0]
-            elif "```" in text:
-                text = text.split("```")[1].split("```")[0]
-            data = json.loads(text.strip())
-            if not isinstance(data, dict):
-                raise ValueError(f"Expected JSON object, got {type(data).__name__}")
-            return data
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Failed to parse JSON response: {e}") from e
+            return parse_json_from_markdown(text)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Failed to parse JSON response: {exc}") from exc
 
     async def complete_with_tools(
         self,

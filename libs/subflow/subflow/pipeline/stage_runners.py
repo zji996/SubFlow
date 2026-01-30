@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import time
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import cast
 
 from subflow.config import Settings
@@ -127,22 +128,80 @@ async def _maybe_close(obj: object) -> None:
         logger.exception("failed to close %r", obj)
 
 
+@dataclass(frozen=True)
+class RunnerContext:
+    """Shared context for stage runners."""
+
+    settings: Settings
+    store: ArtifactStore
+    project_repo: ProjectRepository
+    vad_repo: VADRegionRepository
+    asr_repo: ASRSegmentRepository
+    asr_merged_chunk_repo: ASRMergedChunkRepository
+    global_context_repo: GlobalContextRepository
+    semantic_chunk_repo: SemanticChunkRepository
+    project: Project
+
+
 class StageRunner(ABC):
     stage_name: StageName
 
-    @abstractmethod
     async def run(
         self,
-        *,
-        settings: Settings,
-        store: ArtifactStore,
-        project_repo: ProjectRepository,
-        vad_repo: VADRegionRepository,
-        asr_repo: ASRSegmentRepository,
-        asr_merged_chunk_repo: ASRMergedChunkRepository,
-        global_context_repo: GlobalContextRepository,
-        semantic_chunk_repo: SemanticChunkRepository,
-        project: Project,
+        runner_ctx: RunnerContext | None = None,
+        ctx: PipelineContext | None = None,
+        progress_reporter: ProgressReporter | None = None,
+        **legacy: object,
+    ) -> tuple[PipelineContext, dict[str, str]]:
+        """Execute the stage runner.
+
+        Supports both the newer `RunnerContext` calling convention and a legacy
+        keyword-arguments form for backwards compatibility.
+        """
+        if runner_ctx is None:
+            required = (
+                "settings",
+                "store",
+                "project_repo",
+                "vad_repo",
+                "asr_repo",
+                "asr_merged_chunk_repo",
+                "global_context_repo",
+                "semantic_chunk_repo",
+                "project",
+            )
+            missing = [k for k in required if legacy.get(k) is None]
+            if missing:
+                raise TypeError(f"missing required legacy runner args: {', '.join(missing)}")
+
+            runner_ctx = RunnerContext(
+                settings=cast(Settings, legacy["settings"]),
+                store=cast(ArtifactStore, legacy["store"]),
+                project_repo=cast(ProjectRepository, legacy["project_repo"]),
+                vad_repo=cast(VADRegionRepository, legacy["vad_repo"]),
+                asr_repo=cast(ASRSegmentRepository, legacy["asr_repo"]),
+                asr_merged_chunk_repo=cast(
+                    ASRMergedChunkRepository, legacy["asr_merged_chunk_repo"]
+                ),
+                global_context_repo=cast(GlobalContextRepository, legacy["global_context_repo"]),
+                semantic_chunk_repo=cast(SemanticChunkRepository, legacy["semantic_chunk_repo"]),
+                project=cast(Project, legacy["project"]),
+            )
+            if ctx is None:
+                ctx = cast(PipelineContext, legacy.get("ctx"))
+            if progress_reporter is None:
+                progress_reporter = cast(
+                    ProgressReporter | None, legacy.get("progress_reporter")
+                )
+
+        if ctx is None:
+            raise TypeError("ctx is required")
+        return await self._run(runner_ctx, ctx, progress_reporter)
+
+    @abstractmethod
+    async def _run(
+        self,
+        runner_ctx: RunnerContext,
         ctx: PipelineContext,
         progress_reporter: ProgressReporter | None = None,
     ) -> tuple[PipelineContext, dict[str, str]]:
@@ -152,22 +211,13 @@ class StageRunner(ABC):
 class AudioPreprocessRunner(StageRunner):
     stage_name = StageName.AUDIO_PREPROCESS
 
-    async def run(
+    async def _run(
         self,
-        *,
-        settings: Settings,
-        store: ArtifactStore,  # noqa: ARG002
-        project_repo: ProjectRepository,
-        vad_repo: VADRegionRepository,  # noqa: ARG002
-        asr_repo: ASRSegmentRepository,  # noqa: ARG002
-        asr_merged_chunk_repo: ASRMergedChunkRepository,  # noqa: ARG002
-        global_context_repo: GlobalContextRepository,  # noqa: ARG002
-        semantic_chunk_repo: SemanticChunkRepository,  # noqa: ARG002
-        project: Project,
+        runner_ctx: RunnerContext,
         ctx: PipelineContext,
         progress_reporter: ProgressReporter | None = None,
     ) -> tuple[PipelineContext, dict[str, str]]:
-        stage = AudioPreprocessStage(settings)
+        stage = AudioPreprocessStage(runner_ctx.settings)
         try:
             ctx = await stage.execute(ctx, progress_reporter)
         finally:
@@ -210,8 +260,8 @@ class AudioPreprocessRunner(StageRunner):
                 "path": str(vocals_path),
             }
         if media_files:
-            await project_repo.update_media_files(project.id, media_files)
-            project.media_files = dict(media_files)
+            await runner_ctx.project_repo.update_media_files(runner_ctx.project.id, media_files)
+            runner_ctx.project.media_files = dict(media_files)
 
         return ctx, {}
 
@@ -219,28 +269,19 @@ class AudioPreprocessRunner(StageRunner):
 class VADRunner(StageRunner):
     stage_name = StageName.VAD
 
-    async def run(
+    async def _run(
         self,
-        *,
-        settings: Settings,
-        store: ArtifactStore,
-        project_repo: ProjectRepository,  # noqa: ARG002
-        vad_repo: VADRegionRepository,
-        asr_repo: ASRSegmentRepository,  # noqa: ARG002
-        asr_merged_chunk_repo: ASRMergedChunkRepository,  # noqa: ARG002
-        global_context_repo: GlobalContextRepository,  # noqa: ARG002
-        semantic_chunk_repo: SemanticChunkRepository,  # noqa: ARG002
-        project: Project,
+        runner_ctx: RunnerContext,
         ctx: PipelineContext,
         progress_reporter: ProgressReporter | None = None,
     ) -> tuple[PipelineContext, dict[str, str]]:
-        stage = VADStage(settings)
+        stage = VADStage(runner_ctx.settings)
         try:
             ctx = await stage.execute(ctx, progress_reporter)
         finally:
             await _maybe_close(stage)
 
-        await vad_repo.delete_by_project(project.id)
+        await runner_ctx.vad_repo.delete_by_project(runner_ctx.project.id)
         vad_regions: list[VADSegment] = list(
             ctx.get("vad_regions") or ctx.get("vad_segments") or []
         )
@@ -251,14 +292,14 @@ class VADRunner(StageRunner):
         for i, region in enumerate(vad_regions):
             if region.region_id is None:
                 region.region_id = int(i)
-        await vad_repo.bulk_insert(project.id, vad_regions)
+        await runner_ctx.vad_repo.bulk_insert(runner_ctx.project.id, vad_regions)
 
         artifacts: dict[str, str] = {}
         frame_probs = ctx.get("vad_frame_probs")
         hop_s = float(ctx.get("vad_frame_hop_s") or 0.0)
         if frame_probs is not None and hop_s > 0:
-            ident = await store.save(
-                project.id,
+            ident = await runner_ctx.store.save(
+                runner_ctx.project.id,
                 self.stage_name.value,
                 "vad_frame_probs.bin",
                 encode_vad_frame_probs(frame_probs=frame_probs, frame_hop_s=hop_s),
@@ -270,57 +311,41 @@ class VADRunner(StageRunner):
 class ASRRunner(StageRunner):
     stage_name = StageName.ASR
 
-    async def run(
+    async def _run(
         self,
-        *,
-        settings: Settings,
-        store: ArtifactStore,  # noqa: ARG002
-        project_repo: ProjectRepository,  # noqa: ARG002
-        vad_repo: VADRegionRepository,  # noqa: ARG002
-        asr_repo: ASRSegmentRepository,
-        asr_merged_chunk_repo: ASRMergedChunkRepository,
-        global_context_repo: GlobalContextRepository,  # noqa: ARG002
-        semantic_chunk_repo: SemanticChunkRepository,  # noqa: ARG002
-        project: Project,
+        runner_ctx: RunnerContext,
         ctx: PipelineContext,
         progress_reporter: ProgressReporter | None = None,
     ) -> tuple[PipelineContext, dict[str, str]]:
-        stage = ASRStage(settings)
+        stage = ASRStage(runner_ctx.settings)
         try:
             ctx = await stage.execute(ctx, progress_reporter)
         finally:
             await _maybe_close(stage)
 
-        await asr_repo.delete_by_project(project.id)
+        await runner_ctx.asr_repo.delete_by_project(runner_ctx.project.id)
         asr_segments: list[ASRSegment] = list(ctx.get("asr_segments") or [])
-        await asr_repo.bulk_insert(project.id, asr_segments)
+        await runner_ctx.asr_repo.bulk_insert(runner_ctx.project.id, asr_segments)
 
         merged_chunks: list[ASRMergedChunk] = list(ctx.get("asr_merged_chunks") or [])
-        await asr_merged_chunk_repo.delete_by_project(project.id)
+        await runner_ctx.asr_merged_chunk_repo.delete_by_project(runner_ctx.project.id)
         if merged_chunks:
-            await asr_merged_chunk_repo.bulk_upsert(project.id, merged_chunks)
+            await runner_ctx.asr_merged_chunk_repo.bulk_upsert(
+                runner_ctx.project.id, merged_chunks
+            )
         return ctx, {}
 
 
 class LLMASRCorrectionRunner(StageRunner):
     stage_name = StageName.LLM_ASR_CORRECTION
 
-    async def run(
+    async def _run(
         self,
-        *,
-        settings: Settings,
-        store: ArtifactStore,  # noqa: ARG002
-        project_repo: ProjectRepository,  # noqa: ARG002
-        vad_repo: VADRegionRepository,  # noqa: ARG002
-        asr_repo: ASRSegmentRepository,
-        asr_merged_chunk_repo: ASRMergedChunkRepository,  # noqa: ARG002
-        global_context_repo: GlobalContextRepository,  # noqa: ARG002
-        semantic_chunk_repo: SemanticChunkRepository,  # noqa: ARG002
-        project: Project,
+        runner_ctx: RunnerContext,
         ctx: PipelineContext,
         progress_reporter: ProgressReporter | None = None,
     ) -> tuple[PipelineContext, dict[str, str]]:
-        stage = LLMASRCorrectionStage(settings)
+        stage = LLMASRCorrectionStage(runner_ctx.settings)
         try:
             ctx = await stage.execute(ctx, progress_reporter)
         finally:
@@ -329,8 +354,8 @@ class LLMASRCorrectionRunner(StageRunner):
         corrected_map: dict[int, ASRCorrectedSegment] = dict(
             ctx.get("asr_corrected_segments") or {}
         )
-        await asr_repo.update_corrected_texts(
-            project.id,
+        await runner_ctx.asr_repo.update_corrected_texts(
+            runner_ctx.project.id,
             {int(k): str(v.text or "") for k, v in corrected_map.items()},
         )
         return ctx, {}
@@ -339,32 +364,28 @@ class LLMASRCorrectionRunner(StageRunner):
 class LLMRunner(StageRunner):
     stage_name = StageName.LLM
 
-    async def run(
+    async def _run(
         self,
-        *,
-        settings: Settings,
-        store: ArtifactStore,  # noqa: ARG002
-        project_repo: ProjectRepository,  # noqa: ARG002
-        vad_repo: VADRegionRepository,  # noqa: ARG002
-        asr_repo: ASRSegmentRepository,  # noqa: ARG002
-        asr_merged_chunk_repo: ASRMergedChunkRepository,  # noqa: ARG002
-        global_context_repo: GlobalContextRepository,
-        semantic_chunk_repo: SemanticChunkRepository,
-        project: Project,
+        runner_ctx: RunnerContext,
         ctx: PipelineContext,
         progress_reporter: ProgressReporter | None = None,
     ) -> tuple[PipelineContext, dict[str, str]]:
-        await global_context_repo.delete(project.id)
-        await semantic_chunk_repo.delete_by_project(project.id)
+        delete_ctx = getattr(runner_ctx.global_context_repo, "delete_by_project", None) or getattr(
+            runner_ctx.global_context_repo, "delete", None
+        )
+        if delete_ctx is not None:
+            await delete_ctx(runner_ctx.project.id)
+        await runner_ctx.semantic_chunk_repo.delete_by_project(runner_ctx.project.id)
 
-        max_asr = settings.llm_limits.max_asr_segments
+        max_asr = runner_ctx.settings.llm_limits.max_asr_segments
         if isinstance(max_asr, int) and max_asr > 0:
             asr_segments_for_llm: list[ASRSegment] = list(ctx.get("asr_segments") or [])
             if len(asr_segments_for_llm) > max_asr:
                 ctx = cast(PipelineContext, dict(ctx))
-                ctx["asr_segments"] = asr_segments_for_llm[:max_asr]
+                selected = asr_segments_for_llm[:max_asr]
+                ctx["asr_segments"] = selected
                 ctx["full_transcript"] = " ".join(
-                    seg.text for seg in ctx["asr_segments"] if (seg.text or "").strip()
+                    seg.text for seg in selected if (seg.text or "").strip()
                 )
                 corrected = dict(ctx.get("asr_corrected_segments") or {})
                 if corrected:
@@ -386,7 +407,7 @@ class LLMRunner(StageRunner):
         else:
             llm_reporter = None
 
-        stage1 = GlobalUnderstandingPass(settings)
+        stage1 = GlobalUnderstandingPass(runner_ctx.settings)
         try:
             ctx = await stage1.execute(ctx, llm_reporter)
         finally:
@@ -396,15 +417,17 @@ class LLMRunner(StageRunner):
             llm_reporter.advance_llm_offsets()
             llm_reporter.set_phase_range(20, 100)
 
-        stage2 = SemanticChunkingPass(settings)
+        stage2 = SemanticChunkingPass(runner_ctx.settings)
         try:
             ctx = await stage2.execute(ctx, llm_reporter)
         finally:
             await _maybe_close(stage2)
 
-        await global_context_repo.save(project.id, dict(ctx.get("global_context") or {}))
+        await runner_ctx.global_context_repo.save(
+            runner_ctx.project.id, dict(ctx.get("global_context") or {})
+        )
         chunks: list[SemanticChunk] = list(ctx.get("semantic_chunks") or [])
-        await semantic_chunk_repo.bulk_insert(project.id, chunks)
+        await runner_ctx.semantic_chunk_repo.bulk_insert(runner_ctx.project.id, chunks)
         return ctx, {}
 
 

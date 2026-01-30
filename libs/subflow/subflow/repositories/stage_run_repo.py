@@ -171,6 +171,32 @@ class StageRunRepository(BaseRepository):
             metadata=meta,
         )
 
+    async def reset_to_pending(self, project_id: str, stage: str) -> StageRun:
+        """Reset stage run to pending, clearing timestamps, errors, and metadata."""
+        async with self.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute(
+                    """
+                    INSERT INTO stage_runs (
+                      project_id, stage, status, started_at, completed_at, error_message, metadata
+                    )
+                    VALUES (%s,%s,%s,NULL,NULL,NULL,'{}'::jsonb)
+                    ON CONFLICT (project_id, stage) DO UPDATE SET
+                      status=EXCLUDED.status,
+                      started_at=NULL,
+                      completed_at=NULL,
+                      error_message=NULL,
+                      metadata='{}'::jsonb
+                    RETURNING project_id, stage, status, started_at, completed_at, error_message, metadata
+                    """,
+                    (project_id, str(stage), StageRunStatus.PENDING.value),
+                )
+                row = await cur.fetchone()
+            await conn.commit()
+        if row is None:
+            raise RuntimeError("stage_run reset returned no row")
+        return self._from_row(row)
+
     async def set_progress(
         self,
         project_id: str,

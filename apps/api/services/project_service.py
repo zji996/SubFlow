@@ -107,6 +107,12 @@ class ProjectService:
             json.dumps({"type": "run_stage", "project_id": project_id, "stage": stage.value}),
         )
 
+    async def enqueue_retry_stage(self, project_id: str, stage: StageName) -> None:
+        await self.redis.lpush(
+            self._queue_key(),
+            json.dumps({"type": "retry_stage", "project_id": project_id, "stage": stage.value}),
+        )
+
     async def enqueue_run_all(self, project_id: str, from_stage: StageName | None = None) -> None:
         payload: dict[str, str] = {"type": "run_all", "project_id": project_id}
         if from_stage is not None:

@@ -83,8 +83,12 @@ class GlobalContextRepository(BaseRepository):
             "translation_notes": [str(x) for x in list(notes or [])],
         }
 
-    async def delete(self, project_id: str) -> None:
+    async def delete_by_project(self, project_id: str) -> None:
         async with self.connection() as conn:
             async with conn.cursor() as cur:
                 await cur.execute("DELETE FROM global_contexts WHERE project_id=%s", (project_id,))
             await conn.commit()
+
+    async def delete(self, project_id: str) -> None:
+        # Backwards-compatible alias.
+        await self.delete_by_project(project_id)

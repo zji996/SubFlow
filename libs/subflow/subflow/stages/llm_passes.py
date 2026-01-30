@@ -393,6 +393,8 @@ class SemanticChunkingPass(BaseLLMStage):
             max_retries: int,
             missing_count: int,
             status: str,
+            *,
+            reason: str | None = None,
         ) -> None:
             """Report retry status to frontend."""
             if not progress_reporter or not isinstance(progress_reporter, MetricsProgressReporter):
@@ -406,7 +408,11 @@ class SemanticChunkingPass(BaseLLMStage):
                     completion_t = int(llm_completion_tokens)
                     calls_t = int(llm_calls)
                 tokens_total = prompt_t + completion_t
-                reason = f"缺失 {missing_count} 个翻译" if missing_count > 0 else "解析失败"
+                retry_reason = (
+                    str(reason).strip()
+                    if reason is not None and str(reason).strip()
+                    else (f"缺失 {missing_count} 个翻译" if missing_count > 0 else "解析失败")
+                )
                 await progress_reporter.report_metrics(
                     {
                         "progress": pct,
@@ -422,7 +428,7 @@ class SemanticChunkingPass(BaseLLMStage):
                         "max_concurrent": int(state.max),
                         "retry_count": attempt,
                         "retry_max": max_retries + 1,
-                        "retry_reason": reason,
+                        "retry_reason": retry_reason,
                         "retry_status": status,
                     }
                 )
@@ -439,7 +445,12 @@ class SemanticChunkingPass(BaseLLMStage):
             async def _translate_batch_tool_use() -> dict[int, str]:
                 nonlocal llm_prompt_tokens, llm_completion_tokens, llm_calls
                 all_results: dict[int, str] = {}
+                source_by_id: dict[int, str] = {
+                    int(seg_id): str(text or "").strip() for seg_id, text in batch_items
+                }
                 max_retries = 3
+                saw_retry = False
+                last_attempt_no = 0
 
                 for attempt in range(max_retries + 1):
                     missing_items = [
@@ -485,6 +496,7 @@ class SemanticChunkingPass(BaseLLMStage):
 
                     try:
                         async with tracker.acquire(service):
+                            last_attempt_no = attempt + 1
                             result = await self.llm.complete_with_tools(
                                 [
                                     Message(role="system", content=system_prompt_tool_use),
@@ -544,12 +556,21 @@ class SemanticChunkingPass(BaseLLMStage):
                     will_retry = bool(missing) and attempt < max_retries
                     logger.debug("missing_ids=%s, will_retry=%s", missing, will_retry)
                     if will_retry:
+                        if attempt >= 1 and len(missing) <= 1:
+                            logger.warning(
+                                "batch translate tool_use still missing small set after retry; skipping (attempt=%d/%d, missing=%s)",
+                                attempt + 1,
+                                max_retries + 1,
+                                missing,
+                            )
+                            break
                         logger.warning(
                             "batch translate tool_use missing ids, retrying (attempt=%d/%d, missing=%s)",
                             attempt + 1,
                             max_retries + 1,
                             missing,
                         )
+                        saw_retry = True
                         await _report_retry(attempt + 1, max_retries, len(missing), "retrying")
                         continue
                     break
@@ -558,11 +579,25 @@ class SemanticChunkingPass(BaseLLMStage):
                 missing_final = [i for i in expected_ids_all if int(i) not in all_results]
                 if missing_final:
                     logger.error(
-                        "batch translate tool_use still missing ids after retries; fallback to empty strings (missing=%s)",
+                        "batch translate tool_use still missing ids after retries; fallback to source text (missing=%s)",
                         missing_final,
                     )
+                    await _report_retry(
+                        max(1, int(last_attempt_no)),
+                        max_retries,
+                        len(missing_final),
+                        "failed",
+                        reason=f"缺失 {len(missing_final)} 个翻译（已跳过）",
+                    )
                     for seg_id in missing_final:
-                        all_results[int(seg_id)] = ""
+                        all_results[int(seg_id)] = str(source_by_id.get(int(seg_id), "") or "").strip()
+                elif saw_retry:
+                    await _report_retry(
+                        max(1, int(last_attempt_no)),
+                        max_retries,
+                        0,
+                        "recovered",
+                    )
                 return all_results
 
             # Tool Use only - no JSON fallback

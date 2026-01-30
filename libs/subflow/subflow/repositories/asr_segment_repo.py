@@ -103,6 +103,15 @@ class ASRSegmentRepository(BaseRepository):
                     )
             await conn.commit()
 
+    async def clear_corrected_texts(self, project_id: str) -> None:
+        async with self.connection() as conn:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    "UPDATE asr_segments SET corrected_text=NULL WHERE project_id=%s",
+                    (project_id,),
+                )
+            await conn.commit()
+
     async def get_by_time_range(
         self, project_id: str, start: float, end: float
     ) -> list[ASRSegment]:
