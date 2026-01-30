@@ -25,6 +25,7 @@
   --color-bg-elevated: #1e293b;
   --color-bg-card: rgba(30, 41, 59, 0.6);
   --color-bg-hover: rgba(51, 65, 85, 0.5);
+  --color-bg-input: rgba(15, 23, 42, 0.6);
 
   /* Text */
   --color-text: #f8fafc;
@@ -101,4 +102,3 @@ body {
   scrollbar-width: thin;
   scrollbar-color: rgba(148, 163, 184, 0.2) transparent;
 }
-

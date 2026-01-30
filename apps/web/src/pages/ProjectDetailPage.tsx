@@ -277,7 +277,6 @@ export default function ProjectDetailPage() {
                         {project.status === 'failed' && failedStage && (
                             <button
                                 onClick={() => handleRetry(failedStage.name)}
-                                disabled={project.status === 'processing'}
                                 className="btn-warning"
                             >
                                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">

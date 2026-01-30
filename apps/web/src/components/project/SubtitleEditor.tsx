@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
     getSubtitleEditData,
     type SubtitleEditComputedEntry,
@@ -25,6 +25,103 @@ function formatTimestamp(seconds: number): string {
     const s = Math.floor(seconds % 60)
     const ms = Math.floor((seconds % 1) * 1000)
     return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')},${String(ms).padStart(3, '0')}`
+}
+
+// Export dropdown component with click-to-toggle for mobile compatibility
+interface ExportDropdownProps {
+    onExport: (format: ExportFormat) => Promise<void>
+    isSaving: boolean
+}
+
+function ExportDropdown({ onExport, isSaving }: ExportDropdownProps) {
+    const [isOpen, setIsOpen] = useState(false)
+    const dropdownRef = useRef<HTMLDivElement>(null)
+
+    // Close dropdown when clicking outside
+    useEffect(() => {
+        const handleClickOutside = (event: MouseEvent) => {
+            if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+                setIsOpen(false)
+            }
+        }
+        if (isOpen) {
+            document.addEventListener('mousedown', handleClickOutside)
+            return () => document.removeEventListener('mousedown', handleClickOutside)
+        }
+    }, [isOpen])
+
+    // Close on Escape key
+    useEffect(() => {
+        const handleEscape = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') setIsOpen(false)
+        }
+        if (isOpen) {
+            document.addEventListener('keydown', handleEscape)
+            return () => document.removeEventListener('keydown', handleEscape)
+        }
+    }, [isOpen])
+
+    const handleExport = async (format: ExportFormat) => {
+        setIsOpen(false)
+        await onExport(format)
+    }
+
+    const exportOptions: { format: ExportFormat; icon: string; label: string }[] = [
+        { format: 'srt', icon: '📄', label: 'SRT' },
+        { format: 'vtt', icon: '🌐', label: 'WebVTT' },
+        { format: 'ass', icon: '🎨', label: 'ASS' },
+        { format: 'json', icon: '⚙️', label: 'JSON' },
+    ]
+
+    return (
+        <div ref={dropdownRef} className="relative">
+            <button
+                className="btn-primary"
+                disabled={isSaving}
+                onClick={() => setIsOpen(!isOpen)}
+                aria-haspopup="menu"
+                aria-expanded={isOpen}
+            >
+                {isSaving ? (
+                    <>
+                        <Spinner size="sm" />
+                        保存中...
+                    </>
+                ) : (
+                    <>
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                        </svg>
+                        导出字幕
+                        <svg className={`w-3 h-3 ml-1 transition-transform ${isOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                        </svg>
+                    </>
+                )}
+            </button>
+            {isOpen && (
+                <div
+                    className="absolute bottom-full right-0 mb-2 animate-scale-in"
+                    role="menu"
+                    aria-orientation="vertical"
+                >
+                    <div className="glass-card p-2 shadow-lg min-w-32">
+                        {exportOptions.map(({ format, icon, label }) => (
+                            <button
+                                key={format}
+                                onClick={() => handleExport(format)}
+                                className="w-full text-left px-3 py-2 rounded hover:bg-[--color-bg-hover] text-sm flex items-center gap-2"
+                                role="menuitem"
+                            >
+                                <span aria-hidden="true">{icon}</span>
+                                {label}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+            )}
+        </div>
+    )
 }
 
 export function SubtitleEditor({ projectId, onClose }: SubtitleEditorProps) {
@@ -262,51 +359,10 @@ export function SubtitleEditor({ projectId, onClose }: SubtitleEditorProps) {
                         <button onClick={onClose} className="btn-secondary">
                             取消
                         </button>
-                        <div className="relative group">
-                            <button className="btn-primary" disabled={isSaving}>
-                                {isSaving ? (
-                                    <>
-                                        <Spinner size="sm" />
-                                        保存中...
-                                    </>
-                                ) : (
-                                    <>
-                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                                        </svg>
-                                        导出字幕
-                                    </>
-                                )}
-                            </button>
-                            <div className="absolute bottom-full right-0 mb-2 hidden group-hover:block">
-                                <div className="glass-card p-2 shadow-lg min-w-32">
-                                    <button
-                                        onClick={() => handleSaveExport('srt')}
-                                        className="w-full text-left px-3 py-2 rounded hover:bg-[--color-bg-hover] text-sm"
-                                    >
-                                        📄 SRT
-                                    </button>
-                                    <button
-                                        onClick={() => handleSaveExport('vtt')}
-                                        className="w-full text-left px-3 py-2 rounded hover:bg-[--color-bg-hover] text-sm"
-                                    >
-                                        🌐 WebVTT
-                                    </button>
-                                    <button
-                                        onClick={() => handleSaveExport('ass')}
-                                        className="w-full text-left px-3 py-2 rounded hover:bg-[--color-bg-hover] text-sm"
-                                    >
-                                        🎨 ASS
-                                    </button>
-                                    <button
-                                        onClick={() => handleSaveExport('json')}
-                                        className="w-full text-left px-3 py-2 rounded hover:bg-[--color-bg-hover] text-sm"
-                                    >
-                                        ⚙️ JSON
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
+                        <ExportDropdown
+                            onExport={handleSaveExport}
+                            isSaving={isSaving}
+                        />
                     </div>
                 </div>
             </div>
