@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 
 from subflow.providers.llm.base import LLMUsage
@@ -40,7 +41,7 @@ def build_usage(
 
 
 def log_llm_call(
-    logger,
+    logger: logging.Logger,
     *,
     provider: str,
     model: str,
@@ -70,4 +71,3 @@ def log_llm_call(
         getattr(usage, "completion_tokens", None),
         getattr(usage, "total_tokens", None),
     )
-

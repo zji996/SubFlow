@@ -18,6 +18,7 @@ from subflow.repositories import (
     SubtitleExportRepository,
 )
 from subflow.services import BlobStore
+from subflow.storage import get_artifact_store
 
 logger = logging.getLogger(__name__)
 
@@ -93,7 +94,8 @@ class ProjectService:
         await self.project_repo.update(project)
 
     async def delete_project(self, project_id: str) -> bool:
-        removed = await self.project_repo.delete(project_id)
+        store = get_artifact_store(self.settings)
+        removed = await self.project_repo.delete(project_id, store=store)
         if bool(removed):
             try:
                 await BlobStore(self.settings).release_project_files(project_id)

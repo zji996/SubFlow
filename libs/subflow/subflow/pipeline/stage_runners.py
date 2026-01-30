@@ -80,7 +80,7 @@ class _LLMStageProgressReporter(ProgressReporter):
         await self._inner.report(self._map_progress(progress), message)
 
     async def report_metrics(self, metrics: StageMetrics) -> None:
-        payload = dict(metrics or {})
+        payload = cast(StageMetrics, dict(metrics or {}))
         raw_progress = payload.get("progress")
         if isinstance(raw_progress, int):
             payload["progress"] = self._map_progress(raw_progress)
@@ -190,9 +190,7 @@ class StageRunner(ABC):
             if ctx is None:
                 ctx = cast(PipelineContext, legacy.get("ctx"))
             if progress_reporter is None:
-                progress_reporter = cast(
-                    ProgressReporter | None, legacy.get("progress_reporter")
-                )
+                progress_reporter = cast(ProgressReporter | None, legacy.get("progress_reporter"))
 
         if ctx is None:
             raise TypeError("ctx is required")
@@ -330,9 +328,7 @@ class ASRRunner(StageRunner):
         merged_chunks: list[ASRMergedChunk] = list(ctx.get("asr_merged_chunks") or [])
         await runner_ctx.asr_merged_chunk_repo.delete_by_project(runner_ctx.project.id)
         if merged_chunks:
-            await runner_ctx.asr_merged_chunk_repo.bulk_upsert(
-                runner_ctx.project.id, merged_chunks
-            )
+            await runner_ctx.asr_merged_chunk_repo.bulk_upsert(runner_ctx.project.id, merged_chunks)
         return ctx, {}
 
 
@@ -402,8 +398,9 @@ class LLMRunner(StageRunner):
 
         llm_reporter: ProgressReporter | None
         if progress_reporter is not None:
-            llm_reporter = _LLMStageProgressReporter(progress_reporter)
-            cast(_LLMStageProgressReporter, llm_reporter).set_phase_range(0, 20)
+            llm_stage_reporter = _LLMStageProgressReporter(progress_reporter)
+            llm_stage_reporter.set_phase_range(0, 20)
+            llm_reporter = llm_stage_reporter
         else:
             llm_reporter = None
 

@@ -6,6 +6,7 @@ defines the stable, known keys to improve type safety and readability.
 
 from __future__ import annotations
 
+from array import array
 from typing import Any, Protocol, TypedDict, runtime_checkable
 
 from subflow.models.segment import (
@@ -13,6 +14,8 @@ from subflow.models.segment import (
     ASRMergedChunk,
     ASRSegment,
     SemanticChunk,
+    SegmentTranslation,
+    SentenceSegment,
     VADSegment,
 )
 
@@ -62,11 +65,17 @@ class PipelineContext(TypedDict, total=False):
     vocals_audio_path: str
 
     vad_regions: list[VADSegment]
+    # Legacy alias kept for backward compatibility in some stage code paths.
+    vad_segments: list[VADSegment]
+
+    vad_frame_probs: array
+    vad_frame_hop_s: float
 
     asr_segments: list[ASRSegment]
     asr_segments_index: dict[int, ASRSegment]
     full_transcript: str
     asr_merged_chunks: list[ASRMergedChunk]
+    sentence_segments: list[SentenceSegment]
 
     global_context: dict[str, Any]
     topic: str
@@ -75,6 +84,7 @@ class PipelineContext(TypedDict, total=False):
     glossary: dict[str, str]
     translation_notes: list[str]
     asr_corrected_segments: dict[int, ASRCorrectedSegment]
+    segment_translations: list[SegmentTranslation]
     semantic_chunks: list[SemanticChunk]
 
     subtitle_text: str

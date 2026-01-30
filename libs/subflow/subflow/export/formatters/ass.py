@@ -66,13 +66,18 @@ class ASSFormatter(SubtitleFormatter):
         secondary_color = _ass_color(style.secondary_color, default="&H00CCCCCC")
         primary_outline_color = _ass_color(style.primary_outline_color, default="&H00000000")
         secondary_outline_color = _ass_color(style.secondary_outline_color, default="&H00000000")
-        outline_width = _safe_int(
-            style.primary_outline_width, default=2, min_value=0, max_value=10
+        outline_width = _safe_int(style.primary_outline_width, default=2, min_value=0, max_value=10)
+        secondary_outline_width = _safe_int(
+            style.secondary_outline_width, default=1, min_value=0, max_value=10
         )
-        shadow_depth = _safe_int(getattr(style, "shadow_depth", 1), default=1, min_value=0, max_value=10)
+        shadow_depth = _safe_int(
+            getattr(style, "shadow_depth", 1), default=1, min_value=0, max_value=10
+        )
 
         primary_font = (style.primary_font or "Arial").replace(",", " ").strip() or "Arial"
-        secondary_font = (style.secondary_font or "Arial").replace(",", " ").strip() or "Arial"
+        secondary_font = (style.secondary_font or primary_font).replace(
+            ",", " "
+        ).strip() or primary_font
 
         # Check if inline mode is enabled (single line with \N{\fsXX} separator)
         inline_mode = getattr(style, "inline_mode", True)  # Default to inline mode
@@ -91,6 +96,7 @@ WrapStyle: 0
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Default,{primary_font},{primary_size},{primary_color},{secondary_color},{primary_outline_color},&H80000000,0,0,0,0,100,100,0,0,1,{outline_width},{shadow_depth},{alignment},10,10,{base_margin},1
+Style: Secondary,{secondary_font},{secondary_size},{secondary_color},{secondary_color},{secondary_outline_color},&H80000000,0,0,0,0,100,100,0,0,1,{secondary_outline_width},{shadow_depth},{alignment},10,10,{base_margin},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -122,14 +128,12 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                     events.append(f"Dialogue: 0,{start},{end},Default,,0,0,0,,{secondary_text}")
             else:
                 # Legacy dual-style mode (separate lines for primary/secondary)
-                rendered = [
-                    (kind, text.replace("\n", "\\N"))
-                    for kind, text in selected_lines(entry.primary_text, entry.secondary_text, config)
-                ]
+                rendered = selected_lines(primary_text, secondary_text, config)
                 if not rendered:
                     continue
 
                 for kind, text in rendered:
-                    events.append(f"Dialogue: 0,{start},{end},Default,,0,0,0,,{text}")
+                    style_name = "Default" if kind == "primary" else "Secondary"
+                    events.append(f"Dialogue: 0,{start},{end},{style_name},,0,0,0,,{text}")
 
         return (header + "\n".join(events)).rstrip() + "\n"

@@ -91,7 +91,13 @@ class SemanticChunkRepository(BaseRepository):
 
         translations_by_semantic_id: dict[int, list[TranslationChunk]] = {}
         for tr in translation_rows:
-            sid = int(tr["semantic_chunk_id"])
+            raw_sid = tr.get("semantic_chunk_id")
+            if raw_sid is None:
+                continue
+            try:
+                sid = int(raw_sid) if isinstance(raw_sid, int) else int(str(raw_sid))
+            except (TypeError, ValueError):
+                continue
             text = str(tr.get("text") or "")
             raw_ids = tr.get("segment_ids") or []
             if not isinstance(raw_ids, list):

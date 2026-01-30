@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
+import builtins
 import json
+import logging
 from abc import ABC, abstractmethod
 from pathlib import Path
+from shutil import rmtree
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 class ArtifactStore(ABC):
@@ -18,8 +24,16 @@ class ArtifactStore(ABC):
         """Load artifact bytes."""
 
     @abstractmethod
-    async def list(self, project_id: str, stage: str | None = None) -> list[str]:
+    async def list(self, project_id: str, stage: str | None = None) -> builtins.list[str]:
         """List artifact identifiers."""
+
+    @abstractmethod
+    async def delete_project(self, project_id: str) -> int:
+        """Delete all artifacts for a project. Returns number of objects deleted."""
+
+    @abstractmethod
+    async def list_project_ids(self) -> builtins.list[str]:
+        """Return all project IDs that have artifacts."""
 
     async def get_presigned_url(
         self,
@@ -67,10 +81,46 @@ class LocalArtifactStore(ArtifactStore):
         path = self._path(project_id, stage, name)
         return path.read_bytes()
 
-    async def list(self, project_id: str, stage: str | None = None) -> list[str]:
+    async def list(self, project_id: str, stage: str | None = None) -> builtins.list[str]:
         base = self.base_dir / "projects" / project_id
         if stage:
             base = base / stage
         if not base.exists():
             return []
         return [str(p) for p in base.rglob("*") if p.is_file()]
+
+    async def delete_project(self, project_id: str) -> int:
+        base = self.base_dir / "projects" / str(project_id)
+        if not base.exists():
+            return 0
+
+        def _delete() -> int:
+            count = 0
+            try:
+                for p in base.rglob("*"):
+                    if p.is_file():
+                        count += 1
+            except Exception:
+                count = 0
+            try:
+                rmtree(base, ignore_errors=False)
+            except FileNotFoundError:
+                return 0
+            return count
+
+        try:
+            deleted = int(await asyncio.to_thread(_delete))
+            logger.info("local artifacts deleted (project_id=%s, files=%d)", project_id, deleted)
+            return deleted
+        except Exception as exc:
+            logger.warning("local artifacts delete failed (project_id=%s): %s", project_id, exc)
+            return 0
+
+    async def list_project_ids(self) -> builtins.list[str]:
+        base = self.base_dir / "projects"
+        if not base.exists():
+            return []
+        try:
+            return sorted([p.name for p in base.iterdir() if p.is_dir()])
+        except Exception:
+            return []

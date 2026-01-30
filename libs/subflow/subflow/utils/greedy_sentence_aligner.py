@@ -9,7 +9,7 @@ This module implements a lightweight PoC algorithm:
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Sequence
 from dataclasses import dataclass
 import re
 
@@ -47,11 +47,7 @@ def _is_cjk_char(ch: str) -> bool:
         return False
     code = ord(ch)
     # CJK Unified Ideographs + Ext A + Compatibility Ideographs
-    return (
-        (0x4E00 <= code <= 0x9FFF)
-        or (0x3400 <= code <= 0x4DBF)
-        or (0xF900 <= code <= 0xFAFF)
-    )
+    return (0x4E00 <= code <= 0x9FFF) or (0x3400 <= code <= 0x4DBF) or (0xF900 <= code <= 0xFAFF)
 
 
 def estimate_text_units(text: str) -> int:
@@ -181,7 +177,9 @@ def _probs_to_list(frame_probs: Sequence[float] | object) -> list[float]:
         values = tolist()
         if isinstance(values, list):
             return [float(v) for v in values]
-    return [float(v) for v in frame_probs]  # type: ignore[arg-type]
+    if isinstance(frame_probs, Iterable):
+        return [float(v) for v in frame_probs]
+    return []
 
 
 def find_vad_valley(

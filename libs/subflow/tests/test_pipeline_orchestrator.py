@@ -36,6 +36,17 @@ class InMemoryArtifactStore(ArtifactStore):
             out.append(f"mem://{pid}/{st}/{name}")
         return out
 
+    async def delete_project(self, project_id: str) -> int:
+        removed = 0
+        for key in list(self._data.keys()):
+            if key[0] == str(project_id):
+                removed += 1
+                self._data.pop(key, None)
+        return removed
+
+    async def list_project_ids(self) -> list[str]:
+        return sorted({pid for (pid, _st, _name) in self._data.keys()})
+
 
 class _InMemoryProjectRepo:
     def __init__(self, project: Project) -> None:

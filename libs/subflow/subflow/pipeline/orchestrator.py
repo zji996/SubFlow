@@ -7,6 +7,7 @@ import logging
 import time
 from datetime import datetime, timezone
 from collections.abc import Awaitable, Callable
+from typing import Any, cast
 
 from subflow.config import Settings
 from subflow.error_codes import ErrorCode
@@ -230,7 +231,7 @@ class PipelineOrchestrator:
                     if isinstance(entry, dict):
                         path = entry.get("path")
                         if path:
-                            ctx[ctx_key] = str(path)
+                            cast(dict[str, Any], ctx)[ctx_key] = str(path)
 
         if project.current_stage >= _STAGE_INDEX[StageName.VAD]:
             # Stage 3 expects coarse regions; hydrate from DB and try to load frame-level
@@ -384,9 +385,9 @@ class PipelineOrchestrator:
             elif s == StageName.LLM_ASR_CORRECTION:
                 await self.asr_repo.clear_corrected_texts(db_project.id)
             elif s == StageName.LLM:
-                delete_ctx = getattr(self.global_context_repo, "delete_by_project", None) or getattr(
-                    self.global_context_repo, "delete", None
-                )
+                delete_ctx = getattr(
+                    self.global_context_repo, "delete_by_project", None
+                ) or getattr(self.global_context_repo, "delete", None)
                 if delete_ctx is not None:
                     await delete_ctx(db_project.id)
                 await self.semantic_chunk_repo.delete_by_project(db_project.id)

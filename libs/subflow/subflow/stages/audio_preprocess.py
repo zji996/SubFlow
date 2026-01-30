@@ -124,7 +124,7 @@ class AudioPreprocessStage(Stage):
         context["video_path"] = str(video_path)
 
         audio_hash, audio_size = await asyncio.to_thread(sha256_file, audio_path)
-        derived_params = {
+        derived_params: dict[str, object] = {
             "provider": str(self.settings.audio.provider),
             "demucs_bin": str(self.settings.audio.demucs_bin),
             "demucs_model": str(self.settings.audio.demucs_model),

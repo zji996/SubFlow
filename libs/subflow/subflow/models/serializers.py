@@ -161,13 +161,13 @@ def deserialize_semantic_chunks(items: list[dict[str, Any]]) -> list[SemanticChu
                 for st in raw_segment_translations:
                     if not isinstance(st, dict):
                         continue
-                    seg_id = st.get("asr_segment_id", st.get("segment_id", st.get("id")))
-                    if seg_id is None:
+                    raw_seg_id = st.get("asr_segment_id", st.get("segment_id", st.get("id")))
+                    if raw_seg_id is None:
                         continue
                     translation_chunks.append(
                         TranslationChunk(
                             text=str(st.get("text") or st.get("translation") or ""),
-                            segment_id=int(seg_id),
+                            segment_id=int(raw_seg_id),
                         )
                     )
 

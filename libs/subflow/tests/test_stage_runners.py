@@ -44,6 +44,17 @@ class InMemoryArtifactStore(ArtifactStore):
     async def list(self, project_id: str, stage: str | None = None) -> list[str]:
         return []
 
+    async def delete_project(self, project_id: str) -> int:
+        removed = 0
+        for key in list(self._data.keys()):
+            if key[0] == str(project_id):
+                removed += 1
+                self._data.pop(key, None)
+        return removed
+
+    async def list_project_ids(self) -> list[str]:
+        return sorted({pid for (pid, _st, _name) in self._data.keys()})
+
 
 class _FakeVADRepo:
     def __init__(self) -> None:

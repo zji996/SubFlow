@@ -5,9 +5,10 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import Any
+from typing import Any, Literal
 
 import anthropic
+from anthropic.types import MessageParam
 from tenacity import (
     retry,
     retry_if_exception_type,
@@ -48,13 +49,16 @@ def _split_system_messages(messages: list[Message]) -> tuple[str | None, list[Me
     return (system or None), non_system
 
 
-def _to_anthropic_messages(messages: list[Message]) -> list[dict[str, str]]:
-    out: list[dict[str, str]] = []
+def _to_anthropic_messages(messages: list[Message]) -> list[MessageParam]:
+    out: list[MessageParam] = []
     for m in messages:
         role = str(m.role or "").strip().lower()
-        if role not in {"user", "assistant"}:
-            role = "user"
-        out.append({"role": role, "content": str(m.content or "")})
+        typed_role: Literal["user", "assistant"]
+        if role == "assistant":
+            typed_role = "assistant"
+        else:
+            typed_role = "user"
+        out.append({"role": typed_role, "content": str(m.content or "")})
     return out
 
 
@@ -109,13 +113,16 @@ class AnthropicProvider(LLMProvider):
 
         try:
             # Use streaming mode for better proxy compatibility
-            async with self._client.messages.stream(
-                model=self.model,
-                messages=_to_anthropic_messages(non_system),
-                system=system or anthropic.NOT_GIVEN,
-                temperature=float(temperature),
-                max_tokens=int(max_tokens) if max_tokens is not None else DEFAULT_MAX_TOKENS,
-            ) as stream:
+            stream_kwargs: dict[str, Any] = {
+                "model": self.model,
+                "messages": _to_anthropic_messages(non_system),
+                "temperature": float(temperature),
+                "max_tokens": int(max_tokens) if max_tokens is not None else DEFAULT_MAX_TOKENS,
+            }
+            if system:
+                stream_kwargs["system"] = system
+
+            async with self._client.messages.stream(**stream_kwargs) as stream:
                 async for text in stream.text_stream:
                     text_chunks.append(text)
 
@@ -241,28 +248,29 @@ class AnthropicProvider(LLMProvider):
         system, non_system = _split_system_messages(messages)
         started = time.perf_counter()
         try:
-            response = await self._client.messages.create(
-                model=self.model,
-                messages=_to_anthropic_messages(non_system),
-                system=system or anthropic.NOT_GIVEN,
-                temperature=float(temperature),
-                max_tokens=int(max_tokens) if max_tokens is not None else DEFAULT_MAX_TOKENS,
-                tools=[
+            request: dict[str, Any] = {
+                "model": self.model,
+                "messages": _to_anthropic_messages(non_system),
+                "temperature": float(temperature),
+                "max_tokens": int(max_tokens) if max_tokens is not None else DEFAULT_MAX_TOKENS,
+            }
+            if system:
+                request["system"] = system
+            if tools:
+                request["tools"] = [
                     {
                         "name": t.name,
                         "description": t.description,
                         "input_schema": t.parameters,
                     }
                     for t in tools
-                ],
-                tool_choice=(
+                ]
+                request["tool_choice"] = (
                     {"type": "any"}
                     if parallel_tool_calls
                     else {"type": "tool", "name": tools[0].name}
                 )
-                if tools
-                else anthropic.NOT_GIVEN,
-            )
+            response = await self._client.messages.create(**request)
         except anthropic.RateLimitError as exc:
             logger.warning("llm rate limited: %s", exc)
             raise RetryableLLMError(

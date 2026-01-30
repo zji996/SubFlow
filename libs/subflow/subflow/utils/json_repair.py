@@ -90,14 +90,18 @@ def parse_json_safe(raw: str) -> dict | list | None:
 
     # Try direct parse first
     try:
-        return json.loads(text)
+        parsed = json.loads(text)
+        if isinstance(parsed, (dict, list)):
+            return parsed
     except json.JSONDecodeError:
         pass
 
     # Try to repair and parse
     try:
         repaired = repair_truncated_json(text)
-        return json.loads(repaired)
+        parsed = json.loads(repaired)
+        if isinstance(parsed, (dict, list)):
+            return parsed
     except json.JSONDecodeError:
         pass
 
@@ -106,7 +110,9 @@ def parse_json_safe(raw: str) -> dict | list | None:
     match = re.search(r"(\{[^{}]*\}|\[[^\[\]]*\])", text)
     if match:
         try:
-            return json.loads(match.group(1))
+            parsed = json.loads(match.group(1))
+            if isinstance(parsed, (dict, list)):
+                return parsed
         except json.JSONDecodeError:
             pass
 

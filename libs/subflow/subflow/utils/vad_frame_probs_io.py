@@ -5,6 +5,7 @@ from __future__ import annotations
 import struct
 import sys
 from array import array
+from collections.abc import Iterable
 
 
 _MAGIC = b"SFVADP1\x00"
@@ -49,8 +50,10 @@ def _as_float32_array(frame_probs: object) -> array:
             pass
 
     out = array("f")
+    if not isinstance(frame_probs, Iterable):
+        return out
     try:
-        for v in frame_probs:  # type: ignore[assignment]
+        for v in frame_probs:
             out.append(float(v))
     except TypeError:
         return out

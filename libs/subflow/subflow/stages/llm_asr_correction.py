@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import time
+from collections.abc import Awaitable, Callable
 from typing import Any, cast
 
 from subflow.exceptions import ConfigurationError, StageExecutionError
@@ -99,7 +100,11 @@ class LLMASRCorrectionStage(BaseLLMStage):
             helper = self.json_helper
             complete_with_usage = getattr(helper, "complete_json_with_usage", None)
             if callable(complete_with_usage):
-                return await complete_with_usage(messages)
+                fn = cast(
+                    Callable[[list[Message]], Awaitable[tuple[Any, object]]],
+                    complete_with_usage,
+                )
+                return await fn(messages)
             return await helper.complete_json(messages), None
 
         async def _process_chunk(chunk: ASRMergedChunk) -> tuple[dict[int, str], object | None]:
