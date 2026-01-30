@@ -1,12 +1,6 @@
-import { useCallback, useEffect, useState } from 'react'
-
-import { ApiError } from '../../api/client'
-import {
-    type ContentMode,
-    type ExportFormat,
-    type PrimaryPosition,
-} from '../../api/subtitles'
-import { createExport, listExports, type SubtitleExport } from '../../api/exports'
+import { useState } from 'react'
+import { useExports } from '../../hooks/useExports'
+import type { ContentMode, ExportFormat, PrimaryPosition } from '../../types/entities'
 
 interface SubtitleExportPanelProps {
     projectId: string
@@ -31,104 +25,35 @@ const positionOptions: { value: PrimaryPosition; label: string; description: str
     { value: 'bottom', label: '翻译在下', description: '原文显示在第一行' },
 ]
 
-function formatExportsError(err: unknown): string {
-    if (err instanceof ApiError) {
-        const detailText =
-            err.detail == null
-                ? null
-                : typeof err.detail === 'string'
-                    ? err.detail
-                    : JSON.stringify(err.detail, null, 2)
-
-        const base = `${err.message} (HTTP ${err.status})`
-        if (!detailText || detailText === err.message) return base
-        return `${base}\n${detailText}`
-    }
-    if (err instanceof Error) return err.message
-    return String(err)
-}
-
 export function SubtitleExportPanel({ projectId, hasLLMCompleted }: SubtitleExportPanelProps) {
     const [format, setFormat] = useState<ExportFormat>('srt')
     const [content, setContent] = useState<ContentMode>('both')
     const [position, setPosition] = useState<PrimaryPosition>('top')
 
-    const [exports, setExports] = useState<SubtitleExport[]>([])
-    const [exportsLoading, setExportsLoading] = useState(false)
-    const [exportsError, setExportsError] = useState<string | null>(null)
-    const [isSaving, setIsSaving] = useState(false)
-
-
-
-    const refreshExports = useCallback(async () => {
-        setExportsLoading(true)
-        setExportsError(null)
-        try {
-            if (import.meta.env.DEV) {
-                // eslint-disable-next-line no-console
-                console.log('[SubtitleExportPanel] refreshExports', { projectId })
-            }
-            const items = await listExports(projectId)
-            if (import.meta.env.DEV) {
-                // eslint-disable-next-line no-console
-                console.log('[SubtitleExportPanel] refreshExports OK', { projectId, count: items.length })
-            }
-            setExports(items)
-        } catch (err) {
-            if (import.meta.env.DEV) {
-                // eslint-disable-next-line no-console
-                console.log('[SubtitleExportPanel] refreshExports ERROR', { projectId, err })
-            }
-            setExportsError(formatExportsError(err))
-        } finally {
-            setExportsLoading(false)
-        }
-    }, [projectId])
-
-    useEffect(() => {
-        if (!hasLLMCompleted) return
-        void refreshExports()
-    }, [hasLLMCompleted, refreshExports])
-
-
+    const {
+        data: exports,
+        loading: exportsLoading,
+        saving: isSaving,
+        error: exportsError,
+        refetch: refreshExports,
+        createExport,
+    } = useExports(projectId, { enabled: hasLLMCompleted })
 
     const handleSaveExport = async () => {
-        setIsSaving(true)
-        setExportsError(null)
         try {
-            if (import.meta.env.DEV) {
-                // eslint-disable-next-line no-console
-                console.log('[SubtitleExportPanel] handleSaveExport', {
-                    projectId,
-                    format,
-                    content,
-                    primary_position: position,
-                })
-            }
-            const exp = await createExport(projectId, {
+            const exp = await createExport({
                 format,
                 content,
                 primary_position: position,
             })
-            if (import.meta.env.DEV) {
-                // eslint-disable-next-line no-console
-                console.log('[SubtitleExportPanel] handleSaveExport OK', { projectId, exportId: exp.id })
-            }
-            setExports((prev) => [exp, ...prev.filter((x) => x.id !== exp.id)])
 
             const link = document.createElement('a')
             link.href = exp.download_url
             document.body.appendChild(link)
             link.click()
             document.body.removeChild(link)
-        } catch (err) {
-            if (import.meta.env.DEV) {
-                // eslint-disable-next-line no-console
-                console.log('[SubtitleExportPanel] handleSaveExport ERROR', { projectId, err })
-            }
-            setExportsError(formatExportsError(err))
-        } finally {
-            setIsSaving(false)
+        } catch {
+            // Error state handled by hook
         }
     }
 

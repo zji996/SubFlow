@@ -15,3 +15,10 @@
   margin: 1.5rem 0;
 }
 
+.text-muted {
+  color: var(--color-text-muted);
+}
+
+.text-dim {
+  color: var(--color-text-dim);
+}

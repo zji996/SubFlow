@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
-import { getLLMHealth, checkLLMHealth, LLMHealthResponse } from '../../api/health'
+import { getLLMHealth, checkLLMHealth } from '../../api/health'
 import { LLMHealthPanel } from './LLMHealthPanel'
+import type { LLMHealthResponse } from '../../types/api'
 
 export function LLMHealthIndicator() {
     const [status, setStatus] = useState<LLMHealthResponse | null>(null)

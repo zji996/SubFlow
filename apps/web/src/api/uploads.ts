@@ -2,18 +2,7 @@
  * File upload API
  */
 
-export interface UploadResponse {
-    storage_key: string
-    media_url: string
-    size_bytes: number
-    content_type: string
-}
-
-export interface UploadProgress {
-    loaded: number
-    total: number
-    percent: number
-}
+import type { UploadProgress, UploadResponse } from '../types/api'
 
 /**
  * Upload a file to the server with progress tracking

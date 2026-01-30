@@ -1,7 +1,8 @@
 import type { MouseEvent } from 'react'
 import { Link } from 'react-router-dom'
-import type { Project } from '../../api/projects'
+import type { Project } from '../../types/entities'
 import { StatusBadge } from '../common/StatusBadge'
+import { formatRelativeTime, getMediaName, getProgress } from '../../utils'
 
 interface ProjectCardProps {
     project: Project
@@ -9,41 +10,6 @@ interface ProjectCardProps {
     isDeleting?: boolean
     isSelected?: boolean
     onSelect?: (selected: boolean) => void
-}
-
-// Calculate progress percentage based on current stage
-function getProgress(project: Project): number {
-    if (project.status === 'completed') return 100
-    if (project.status === 'failed') return (project.current_stage / 5) * 100
-    // Each stage is 20%
-    return Math.min((project.current_stage / 5) * 100, 100)
-}
-
-// Get filename from path/url
-function getMediaName(url: string): string {
-    if (!url) return '未知文件'
-    const parts = url.split('/').pop() || url
-    const decoded = decodeURIComponent(parts.split('?')[0])
-    return decoded.length > 40 ? decoded.slice(0, 37) + '...' : decoded
-}
-
-// Format relative time
-function formatRelativeTime(isoString?: string | null): string {
-    if (!isoString) return ''
-    const date = new Date(isoString)
-    if (isNaN(date.getTime())) return ''
-
-    const now = Date.now()
-    const diff = now - date.getTime()
-    const seconds = Math.floor(diff / 1000)
-    const minutes = Math.floor(seconds / 60)
-    const hours = Math.floor(minutes / 60)
-    const days = Math.floor(hours / 24)
-
-    if (days > 0) return `${days}天前`
-    if (hours > 0) return `${hours}小时前`
-    if (minutes > 0) return `${minutes}分钟前`
-    return '刚刚'
 }
 
 // Card content component to avoid duplication

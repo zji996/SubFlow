@@ -1,92 +1,34 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import {
-    getProjectPreview,
-    getProjectPreviewSegments,
-    type PreviewSegment,
-    type ProjectPreviewResponse,
-} from '../api/preview'
 import { Spinner } from '../components/common/Spinner'
-
-function formatTime(seconds: number): string {
-    const mins = Math.floor(seconds / 60)
-    const secs = Math.floor(seconds % 60)
-    const ms = Math.floor((seconds % 1) * 1000)
-    return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}.${String(ms).padStart(3, '0')}`
-}
-
-function formatDuration(seconds: number): string {
-    const mins = Math.floor(seconds / 60)
-    const secs = Math.floor(seconds % 60)
-    return `${mins}:${String(secs).padStart(2, '0')}`
-}
+import { usePreview } from '../hooks/usePreview'
+import { formatDuration, formatTime } from '../utils'
 
 export default function PreviewPage() {
     const { projectId } = useParams<{ projectId: string }>()
-    const [preview, setPreview] = useState<ProjectPreviewResponse | null>(null)
-    const [segments, setSegments] = useState<PreviewSegment[]>([])
-    const [segmentsTotal, setSegmentsTotal] = useState(0)
-    const [loading, setLoading] = useState(true)
-    const [segmentsLoading, setSegmentsLoading] = useState(false)
-    const [segmentsError, setSegmentsError] = useState<string | null>(null)
-    const [error, setError] = useState<string | null>(null)
-    const [selectedRegion, setSelectedRegion] = useState<number | null>(null)
-    const [offset, setOffset] = useState(0)
     const [searchQuery, setSearchQuery] = useState('')
-    const limit = 50
 
-    const loadPreview = useCallback(async () => {
-        if (!projectId) return
-        setLoading(true)
-        setError(null)
-        try {
-            const data = await getProjectPreview(projectId)
-            setPreview(data)
-        } catch (err) {
-            setError(err instanceof Error ? err.message : 'Failed to load preview')
-        } finally {
-            setLoading(false)
-        }
-    }, [projectId])
-
-    const loadSegments = useCallback(async (nextOffset: number) => {
-        if (!projectId) return
-        setSegmentsLoading(true)
-        setSegmentsError(null)
-        try {
-            const data = await getProjectPreviewSegments(projectId, {
-                offset: nextOffset,
-                limit,
-                region_id: selectedRegion ?? undefined,
-            })
-            setSegments(data.segments)
-            setSegmentsTotal(data.total)
-            setOffset(nextOffset)
-        } catch (err) {
-            console.error('Failed to load segments:', err)
-            setSegmentsError(err instanceof Error ? err.message : 'Failed to load segments')
-        } finally {
-            setSegmentsLoading(false)
-        }
-    }, [projectId, selectedRegion])
-
-    useEffect(() => {
-        loadPreview()
-    }, [loadPreview])
-
-    useEffect(() => {
-        if (preview) {
-            loadSegments(0)
-        }
-    }, [preview, selectedRegion, loadSegments])
+    const {
+        data: preview,
+        loading,
+        error,
+        segments,
+        segmentsTotal,
+        segmentsLoading,
+        segmentsError,
+        selectedRegion,
+        setSelectedRegion,
+        offset,
+        loadSegments,
+        limit,
+    } = usePreview(projectId)
 
     const handleRegionClick = (regionId: number | null) => {
         setSelectedRegion(regionId)
-        setOffset(0)
     }
 
     const handlePageChange = (newOffset: number) => {
-        loadSegments(newOffset)
+        void loadSegments(newOffset)
     }
 
     const filteredSegments = useMemo(() => {

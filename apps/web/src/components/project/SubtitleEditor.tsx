@@ -1,12 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import {
-    getSubtitleEditData,
-    type SubtitleEditComputedEntry,
-    type SubtitleEditDataResponse,
-} from '../../api/subtitles'
-import { createExport } from '../../api/exports'
-import type { ExportFormat, ContentMode, PrimaryPosition } from '../../api/subtitles'
+import { useEffect, useRef, useState } from 'react'
+import { useExports } from '../../hooks/useExports'
+import { useSubtitles } from '../../hooks/useSubtitles'
+import type { ExportFormat, SubtitleEditComputedEntry } from '../../types/entities'
 import { Spinner } from '../common/Spinner'
+import { formatTimestamp } from '../../utils'
 
 interface SubtitleEditorProps {
     projectId: string
@@ -17,14 +14,6 @@ interface EditedEntry {
     segment_id: number
     secondary?: string
     primary?: string
-}
-
-function formatTimestamp(seconds: number): string {
-    const h = Math.floor(seconds / 3600)
-    const m = Math.floor((seconds % 3600) / 60)
-    const s = Math.floor(seconds % 60)
-    const ms = Math.floor((seconds % 1) * 1000)
-    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')},${String(ms).padStart(3, '0')}`
 }
 
 // Export dropdown component with click-to-toggle for mobile compatibility
@@ -125,29 +114,9 @@ function ExportDropdown({ onExport, isSaving }: ExportDropdownProps) {
 }
 
 export function SubtitleEditor({ projectId, onClose }: SubtitleEditorProps) {
-    const [loading, setLoading] = useState(true)
-    const [error, setError] = useState<string | null>(null)
-    const [data, setData] = useState<SubtitleEditDataResponse | null>(null)
+    const { data, loading, error, refetch } = useSubtitles(projectId)
+    const { createExport, saving: isSaving, error: saveError } = useExports(projectId, { enabled: false })
     const [editedEntries, setEditedEntries] = useState<Map<number, EditedEntry>>(new Map())
-    const [isSaving, setIsSaving] = useState(false)
-    const [saveError, setSaveError] = useState<string | null>(null)
-
-    const fetchData = useCallback(async () => {
-        setLoading(true)
-        setError(null)
-        try {
-            const result = await getSubtitleEditData(projectId)
-            setData(result)
-        } catch (err) {
-            setError(err instanceof Error ? err.message : 'Failed to load subtitle data')
-        } finally {
-            setLoading(false)
-        }
-    }, [projectId])
-
-    useEffect(() => {
-        void fetchData()
-    }, [fetchData])
 
     const getPrimary = (entry: SubtitleEditComputedEntry): string => {
         return entry.primary
@@ -175,9 +144,6 @@ export function SubtitleEditor({ projectId, onClose }: SubtitleEditorProps) {
     }
 
     const handleSaveExport = async (format: ExportFormat) => {
-        setIsSaving(true)
-        setSaveError(null)
-
         const entriesArray: Array<{
             segment_id: number
             secondary?: string
@@ -197,12 +163,12 @@ export function SubtitleEditor({ projectId, onClose }: SubtitleEditorProps) {
         }
 
         try {
-            const exp = await createExport(projectId, {
+            const exp = await createExport({
                 format,
-                content: 'both' as ContentMode,
-                primary_position: 'top' as PrimaryPosition,
+                content: 'both',
+                primary_position: 'top',
                 edited_entries: entriesArray.length > 0 ? entriesArray : undefined,
-            } as Parameters<typeof createExport>[1])
+            })
 
             // Trigger download
             const link = document.createElement('a')
@@ -210,10 +176,8 @@ export function SubtitleEditor({ projectId, onClose }: SubtitleEditorProps) {
             document.body.appendChild(link)
             link.click()
             document.body.removeChild(link)
-        } catch (err) {
-            setSaveError(err instanceof Error ? err.message : 'Failed to save export')
-        } finally {
-            setIsSaving(false)
+        } catch {
+            // Error state handled by hook
         }
     }
 
@@ -238,7 +202,7 @@ export function SubtitleEditor({ projectId, onClose }: SubtitleEditorProps) {
                 <div className="glass-card p-8 max-w-md">
                     <div className="text-[--color-error-light] mb-4">{error}</div>
                     <div className="flex gap-3">
-                        <button onClick={fetchData} className="btn-primary">
+                        <button onClick={refetch} className="btn-primary">
                             重试
                         </button>
                         <button onClick={onClose} className="btn-secondary">

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { LLMHealthResponse } from '../../api/health'
+import type { LLMHealthResponse } from '../../types/api'
 import { Spinner } from './Spinner'
 
 interface LLMHealthPanelProps {

@@ -4,6 +4,7 @@ interface UsePollingOptions<T> {
     fetcher: (signal: AbortSignal) => Promise<T>
     interval?: number
     enabled?: boolean
+    pollOnError?: boolean
     onSuccess?: (data: T) => void
     onError?: (error: Error) => void
     shouldStop?: (data: T) => boolean
@@ -13,12 +14,13 @@ export function usePolling<T>({
     fetcher,
     interval = 2000,
     enabled = true,
+    pollOnError = true,
     onSuccess,
     onError,
     shouldStop,
 }: UsePollingOptions<T>) {
     const [data, setData] = useState<T | null>(null)
-    const [loading, setLoading] = useState(true) // Start with loading=true for initial fetch
+    const [loading, setLoading] = useState(() => enabled) // Start loading only when enabled
     const [error, setError] = useState<Error | null>(null)
     const timeoutRef = useRef<number | null>(null)
     const stoppedRef = useRef(false)
@@ -61,8 +63,8 @@ export function usePolling<T>({
             setError(error)
             onErrorRef.current?.(error)
 
-            // Continue polling on error
-            if (enabled && !stoppedRef.current) {
+            // Continue polling on error (optional)
+            if (enabled && pollOnError && !stoppedRef.current) {
                 timeoutRef.current = window.setTimeout(poll, interval)
             }
         } finally {
@@ -70,7 +72,7 @@ export function usePolling<T>({
                 setLoading(false)
             }
         }
-    }, [fetcher, interval, enabled]) // Removed callback dependencies - using refs instead
+    }, [fetcher, interval, enabled, pollOnError]) // Removed callback dependencies - using refs instead
 
     useEffect(() => {
         stoppedRef.current = false

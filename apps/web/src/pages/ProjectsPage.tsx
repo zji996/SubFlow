@@ -1,21 +1,8 @@
-import { useCallback, useState, useMemo, useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { listProjects, deleteProject, type Project } from '../api/projects'
 import { ProjectCard } from '../components/project/ProjectCard'
 import { Select } from '../components/common/Select'
-import { usePolling } from '../hooks/usePolling'
-import { useDocumentVisibility } from '../hooks/useDocumentVisibility'
-
-type SortOption = 'updated_desc' | 'updated_asc' | 'created_desc' | 'created_asc' | 'name_asc' | 'name_desc'
-
-const sortOptions: { value: SortOption; label: string }[] = [
-    { value: 'updated_desc', label: '最近更新' },
-    { value: 'updated_asc', label: '最早更新' },
-    { value: 'created_desc', label: '最近创建' },
-    { value: 'created_asc', label: '最早创建' },
-    { value: 'name_asc', label: '名称 A-Z' },
-    { value: 'name_desc', label: '名称 Z-A' },
-]
+import { useProjects, type SortOption } from '../hooks/useProjects'
 
 // Skeleton component for loading state
 function ProjectCardSkeleton() {
@@ -38,107 +25,42 @@ function ProjectCardSkeleton() {
 }
 
 export default function ProjectsPage() {
-    const [projects, setProjects] = useState<Project[]>([])
-    const [error, setError] = useState<string | null>(null)
-    const [sortBy, setSortBy] = useState<SortOption>('updated_desc')
-    const [deletingId, setDeletingId] = useState<string | null>(null)
+    const {
+        data: projects,
+        loading,
+        error,
+        clearError,
+        refetch,
+        sortBy,
+        setSortBy,
+        sortOptions,
+        deleteProject,
+        deletingIds,
+    } = useProjects()
+    const [uiError, setUiError] = useState<string | null>(null)
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
     const [isBatchDeleting, setIsBatchDeleting] = useState(false)
     const [isSelectMode, setIsSelectMode] = useState(false)
-
-    // Pause polling when user switches to another tab
-    const isVisible = useDocumentVisibility()
-
-    const fetcher = useCallback((signal: AbortSignal) => listProjects({ signal }), [])
-
-    // Only auto-poll when there are projects in processing state
-    const hasProcessing = projects.some(p => p.status === 'processing')
-    const shouldPoll = isVisible && hasProcessing
-
-    const { loading, refetch } = usePolling<Project[]>({
-        fetcher,
-        interval: 15000, // 15 seconds when polling
-        enabled: shouldPoll,
-        onSuccess: (data) => {
-            setProjects(data)
-            setError(null)
-            // Clear selection for deleted projects
-            setSelectedIds(prev => {
-                const newIds = new Set(prev)
-                const currentIds = new Set(data.map(p => p.id))
-                for (const id of newIds) {
-                    if (!currentIds.has(id)) newIds.delete(id)
-                }
-                return newIds
-            })
-        },
-        onError: (err) => {
-            setError(err.message)
-        },
-    })
-
-    // Initial fetch on mount (always happens once)
-    const [initialLoaded, setInitialLoaded] = useState(false)
     useEffect(() => {
-        if (!initialLoaded) {
-            refetch()
-            setInitialLoaded(true)
-        }
-    }, [initialLoaded, refetch])
-
-    // Sort projects
-    const sortedProjects = useMemo(() => {
-        const sorted = [...projects]
-        sorted.sort((a, b) => {
-            switch (sortBy) {
-                case 'updated_desc': {
-                    const aTime = a.updated_at ? new Date(a.updated_at).getTime() : 0
-                    const bTime = b.updated_at ? new Date(b.updated_at).getTime() : 0
-                    return bTime - aTime
-                }
-                case 'updated_asc': {
-                    const aTime = a.updated_at ? new Date(a.updated_at).getTime() : 0
-                    const bTime = b.updated_at ? new Date(b.updated_at).getTime() : 0
-                    return aTime - bTime
-                }
-                case 'created_desc': {
-                    const aTime = a.created_at ? new Date(a.created_at).getTime() : 0
-                    const bTime = b.created_at ? new Date(b.created_at).getTime() : 0
-                    return bTime - aTime
-                }
-                case 'created_asc': {
-                    const aTime = a.created_at ? new Date(a.created_at).getTime() : 0
-                    const bTime = b.created_at ? new Date(b.created_at).getTime() : 0
-                    return aTime - bTime
-                }
-                case 'name_asc':
-                    return (a.name || '').localeCompare(b.name || '')
-                case 'name_desc':
-                    return (b.name || '').localeCompare(a.name || '')
-                default:
-                    return 0
+        // Clear selection for deleted projects
+        setSelectedIds((prev) => {
+            const next = new Set(prev)
+            const currentIds = new Set(projects.map((p) => p.id))
+            for (const id of next) {
+                if (!currentIds.has(id)) next.delete(id)
             }
+            return next
         })
-        return sorted
-    }, [projects, sortBy])
+    }, [projects])
 
     const handleDelete = async (projectId: string) => {
         if (!window.confirm('确认删除该项目？此操作不可恢复。')) return
-
-        setDeletingId(projectId)
-        try {
-            await deleteProject(projectId)
-            setProjects(prev => prev.filter(p => p.id !== projectId))
-            setSelectedIds(prev => {
-                const newIds = new Set(prev)
-                newIds.delete(projectId)
-                return newIds
-            })
-        } catch (err) {
-            setError(err instanceof Error ? err.message : '删除失败')
-        } finally {
-            setDeletingId(null)
-        }
+        await deleteProject(projectId)
+        setSelectedIds((prev) => {
+            const next = new Set(prev)
+            next.delete(projectId)
+            return next
+        })
     }
 
     const handleSelect = (projectId: string, selected: boolean) => {
@@ -170,18 +92,14 @@ export default function ProjectsPage() {
         const failed: string[] = []
 
         for (const id of idsToDelete) {
-            try {
-                await deleteProject(id)
-            } catch {
-                failed.push(id)
-            }
+            const ok = await deleteProject(id)
+            if (!ok) failed.push(id)
         }
 
-        setProjects(prev => prev.filter(p => !idsToDelete.includes(p.id) || failed.includes(p.id)))
         setSelectedIds(new Set(failed))
 
         if (failed.length > 0) {
-            setError(`${idsToDelete.length - failed.length} 个项目删除成功，${failed.length} 个失败`)
+            setUiError(`${idsToDelete.length - failed.length} 个项目删除成功，${failed.length} 个失败`)
         }
 
         setIsBatchDeleting(false)
@@ -232,14 +150,17 @@ export default function ProjectsPage() {
             </div>
 
             {/* Error Alert */}
-            {error && (
+            {(uiError || error) && (
                 <div className="p-4 rounded-xl bg-[--color-error]/10 border border-[--color-error]/30 text-[--color-error-light] mb-6 flex items-center gap-3 animate-fade-in">
                     <svg className="w-5 h-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                     </svg>
-                    <span>{error}</span>
+                    <span>{uiError || error}</span>
                     <button
-                        onClick={() => setError(null)}
+                        onClick={() => {
+                            if (uiError) setUiError(null)
+                            else clearError()
+                        }}
                         className="ml-auto text-[--color-error-light] hover:text-white"
                     >
                         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -436,7 +357,7 @@ export default function ProjectsPage() {
 
                     {/* Project Cards */}
                     <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                        {sortedProjects.map((p, index) => (
+                        {projects.map((p, index) => (
                             <div
                                 key={p.id}
                                 className="animate-slide-up"
@@ -445,7 +366,7 @@ export default function ProjectsPage() {
                                 <ProjectCard
                                     project={p}
                                     onDelete={() => handleDelete(p.id)}
-                                    isDeleting={deletingId === p.id}
+                                    isDeleting={deletingIds.has(p.id)}
                                     isSelected={isSelectMode ? selectedIds.has(p.id) : undefined}
                                     onSelect={isSelectMode ? (selected) => handleSelect(p.id, selected) : undefined}
                                 />
