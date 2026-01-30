@@ -141,7 +141,7 @@ SubFlow 是一个基于语义理解的视频字幕翻译系统。与传统的逐
 ```
 
 **关键决策**：
-- 宁细勿粗：静音阈值设置较短（~300ms），让 LLM 后续决定合并
+- 输出粗粒度 region：合并短静音（~500ms），让 Stage 3 再做句子级切分
 - 生成的是"候选切分点"，不是最终字幕边界
 
 **输入 Artifact**: `vocals.wav`
@@ -171,9 +171,12 @@ SubFlow 是一个基于语义理解的视频字幕翻译系统。与传统的逐
 │         sentence = "This is great."                                  │
 │         estimated_time = cursor + chunk_duration * char_ratio        │
 │                                                                      │
-│      2b. 【超长句子处理】若没找到句末标点，但有逗号且估计时长          │
-│          超过 max_segment_s（默认 8s），则在逗号处强制切分            │
-│          → 防止说话人连续说 30 秒不带句号导致超长 segment             │
+│      2b. 【逗号分割】若没找到句末标点，但文本长度超过阈值且存在逗号    │
+│          （`max_segment_chars`，默认 50），则在合适的逗号处切分        │
+│          → 更符合字幕阅读习惯（按长度，而非纯时长）                    │
+│                                                                        │
+│      2c. 【硬上限】若仍无明确标点，则用 `max_segment_s` 作为硬上限     │
+│          → 防止说话人连续说很久无标点导致超长 segment                  │
 │                                                                      │
 │      3. VAD Valley 搜索：在 estimated_time ± 1s 找静音点             │
 │         actual_cut_time = find_vad_valley(...)                       │
@@ -188,7 +191,8 @@ SubFlow 是一个基于语义理解的视频字幕翻译系统。与传统的逐
 - 每次 ASR 输入 ≥ 几秒，有足够上下文，**消除短 segment 幻觉**
 - 利用 ASR 输出的标点符号定位句子边界，**保证每段是完整句子**
 - 用 VAD 帧级概率找静音点，**切分点在自然停顿处**
-- `max_segment_s` 限制单 segment 最大时长，**防止超长句子**
+- `max_segment_chars` 控制是否允许在逗号处切分，**按字幕长度触发**
+- `max_segment_s` 作为无标点时的硬上限，**防止超长 segment**
 
 **关键理解**：
 
@@ -199,7 +203,8 @@ SubFlow 是一个基于语义理解的视频字幕翻译系统。与传统的逐
 ```env
 GREEDY_SENTENCE_ASR_MAX_CHUNK_S=10.0         # 初始窗口（秒）
 GREEDY_SENTENCE_ASR_FALLBACK_CHUNK_S=15.0    # 扩展窗口（未找到句末标点时）
-GREEDY_SENTENCE_ASR_MAX_SEGMENT_S=8.0        # 单 segment 最大时长，超过则在逗号处强制切分
+GREEDY_SENTENCE_ASR_MAX_SEGMENT_S=8.0        # 无明确标点时的硬上限（秒）
+GREEDY_SENTENCE_ASR_MAX_SEGMENT_CHARS=50     # 逗号分割阈值（中文字符+英文单词）
 GREEDY_SENTENCE_ASR_VAD_SEARCH_RANGE_S=1.0   # VAD valley 搜索范围 ±秒
 GREEDY_SENTENCE_ASR_VAD_VALLEY_THRESHOLD=0.3 # 低于该概率视为 valley（静音）
 GREEDY_SENTENCE_ASR_PARALLEL_GAP_S=2.0       # region gap >= 该值可并行

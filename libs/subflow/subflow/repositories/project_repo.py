@@ -176,6 +176,30 @@ class ProjectRepository(BaseRepository):
                 rows = await cur.fetchall()
         return [self._from_row(r) for r in rows]
 
+    async def find_stale_processing(
+        self, *, max_age_minutes: int = 10, limit: int = 200
+    ) -> list[Project]:
+        """Find projects stuck in processing with old updated_at timestamps."""
+        max_age_minutes = max(1, int(max_age_minutes))
+        limit = max(1, min(1000, int(limit)))
+        async with self.connection() as conn:
+            async with conn.cursor(row_factory=dict_row) as cur:
+                await cur.execute(
+                    """
+                    SELECT id, name, media_url, media_files, source_language, target_language,
+                           auto_workflow, status, current_stage, error_message,
+                           created_at, updated_at
+                    FROM projects
+                    WHERE status = %s
+                      AND updated_at < (NOW() - (%s * INTERVAL '1 minute'))
+                    ORDER BY updated_at ASC
+                    LIMIT %s
+                    """,
+                    (ProjectStatus.PROCESSING.value, max_age_minutes, limit),
+                )
+                rows = await cur.fetchall()
+        return [self._from_row(r) for r in rows]
+
     async def update_media_files(self, project_id: str, media_files: dict[str, object]) -> None:
         now = _utcnow()
         async with self.connection() as conn:

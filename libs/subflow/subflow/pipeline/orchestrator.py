@@ -290,6 +290,60 @@ class PipelineOrchestrator:
                 return
         project.stage_runs.append(stage_run)
 
+    @staticmethod
+    def _infer_current_stage_from_runs(stage_runs: list[StageRun]) -> int:
+        by_stage: dict[StageName, StageRun] = {sr.stage: sr for sr in list(stage_runs or [])}
+        inferred = 0
+        for stage in _STAGE_ORDER:
+            sr = by_stage.get(stage)
+            if sr is not None and sr.status == StageRunStatus.COMPLETED:
+                inferred = max(inferred, _STAGE_INDEX[stage])
+        return int(inferred)
+
+    @staticmethod
+    def _all_required_stages_completed(stage_runs: list[StageRun]) -> bool:
+        by_stage: dict[StageName, StageRun] = {sr.stage: sr for sr in list(stage_runs or [])}
+        return all(
+            by_stage.get(stage) is not None and by_stage[stage].status == StageRunStatus.COMPLETED
+            for stage in _STAGE_ORDER
+        )
+
+    async def _reconcile_project_from_runs(self, project: Project) -> Project:
+        """Best-effort reconcile project status/current_stage with stage_runs.
+
+        This handles edge cases where a stage_run is marked completed but the project row
+        wasn't updated due to a crash between DB writes.
+        """
+        stage_runs = await self.stage_run_repo.list_by_project(project.id)
+        project.stage_runs = list(stage_runs or [])
+
+        inferred_stage = self._infer_current_stage_from_runs(project.stage_runs)
+        if inferred_stage > int(project.current_stage or 0):
+            project.current_stage = inferred_stage
+
+        if self._all_required_stages_completed(project.stage_runs):
+            if project.status != ProjectStatus.COMPLETED:
+                project.status = ProjectStatus.COMPLETED
+                await self.project_repo.update_status(
+                    project.id,
+                    ProjectStatus.COMPLETED.value,
+                    current_stage=project.current_stage,
+                    error_message=None,
+                )
+            else:
+                await self.project_repo.update_status(
+                    project.id,
+                    project.status.value,
+                    current_stage=project.current_stage,
+                )
+        elif inferred_stage > 0:
+            await self.project_repo.update_status(
+                project.id,
+                project.status.value,
+                current_stage=project.current_stage,
+            )
+        return project
+
     async def reset_stage_for_retry(self, project: Project, stage: StageName) -> Project:
         """Reset a failed stage so it can be re-executed.
 
@@ -360,6 +414,23 @@ class PipelineOrchestrator:
             raise StageExecutionError(stage.value, "project not found", project_id=project.id)
         project = db_project
         project.stage_runs = await self.stage_run_repo.list_by_project(project.id)
+        inferred_stage = self._infer_current_stage_from_runs(project.stage_runs)
+        if inferred_stage > int(project.current_stage or 0):
+            project.current_stage = inferred_stage
+            await self.project_repo.update_status(
+                project.id,
+                project.status.value,
+                current_stage=project.current_stage,
+            )
+        if self._all_required_stages_completed(project.stage_runs):
+            if project.status != ProjectStatus.COMPLETED:
+                project.status = ProjectStatus.COMPLETED
+                await self.project_repo.update_status(
+                    project.id,
+                    ProjectStatus.COMPLETED.value,
+                    current_stage=project.current_stage,
+                    error_message=None,
+                )
 
         existing = next((sr for sr in list(project.stage_runs or []) if sr.stage == stage), None)
         if existing is not None and existing.status == StageRunStatus.FAILED:
@@ -471,11 +542,20 @@ class PipelineOrchestrator:
                         "metrics": dict(getattr(run, "metrics", {}) or {}),
                     },
                 )
-                await self.project_repo.update_status(
-                    project.id,
-                    ProjectStatus.PROCESSING.value,
-                    current_stage=project.current_stage,
-                )
+                if stage_name == StageName.LLM:
+                    project.status = ProjectStatus.COMPLETED
+                    await self.project_repo.update_status(
+                        project.id,
+                        ProjectStatus.COMPLETED.value,
+                        current_stage=project.current_stage,
+                        error_message=None,
+                    )
+                else:
+                    await self.project_repo.update_status(
+                        project.id,
+                        ProjectStatus.PROCESSING.value,
+                        current_stage=project.current_stage,
+                    )
                 logger.info(
                     "stage done (project_id=%s, stage=%s, duration_ms=%s)",
                     project.id,
@@ -531,13 +611,7 @@ class PipelineOrchestrator:
                     error_code=run.error_code,
                 ) from exc
 
-        if project.current_stage >= _STAGE_INDEX[StageName.LLM]:
-            project.status = ProjectStatus.COMPLETED
-            await self.project_repo.update_status(
-                project.id,
-                ProjectStatus.COMPLETED.value,
-                current_stage=project.current_stage,
-            )
+        await self._reconcile_project_from_runs(project)
 
         return project, ctx
 

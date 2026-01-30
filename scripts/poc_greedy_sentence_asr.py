@@ -41,6 +41,7 @@ from subflow.utils.audio import cut_audio_segment
 from subflow.utils.greedy_sentence_aligner import (
     GreedySentenceAlignerConfig,
     SentenceAlignedSegment,
+    estimate_text_units,
     greedy_sentence_align_region,
 )
 
@@ -81,6 +82,18 @@ def _parse_args() -> argparse.Namespace:
         type=float,
         default=0.3,
         help="Prob below this treated as silence",
+    )
+    parser.add_argument(
+        "--max-segment-s",
+        type=float,
+        default=8.0,
+        help="Hard upper bound for segments without clear punctuation",
+    )
+    parser.add_argument(
+        "--max-segment-chars",
+        type=int,
+        default=50,
+        help="Comma split threshold (CJK chars + Latin words)",
     )
     parser.add_argument("--min-segment-s", type=float, default=0.5, help="Minimum segment length")
     parser.add_argument("--keep-chunks", action="store_true", help="Keep cut chunks for debugging")
@@ -254,6 +267,8 @@ async def _run() -> int:
     frame_hop_s = float(getattr(vad_provider, "frame_hop_s", 0.02))
     cfg = GreedySentenceAlignerConfig(
         max_chunk_s=float(args.max_chunk_s),
+        max_segment_s=float(args.max_segment_s),
+        max_segment_chars=int(args.max_segment_chars),
         vad_search_range_s=float(args.vad_search_range_s),
         vad_valley_threshold=float(args.vad_valley_threshold),
         min_segment_s=float(args.min_segment_s),
@@ -273,6 +288,20 @@ async def _run() -> int:
         )
         sentence_segments.extend(segs)
         sentence_segment_region_ids.extend([int(region_id)] * len(segs))
+
+    endings_sentence = set(str(cfg.sentence_endings))
+    endings_clause = set(str(cfg.clause_endings))
+    print("\nSegment stats (idx start end dur_s units comma_split):", flush=True)
+    for i, seg in enumerate(sentence_segments):
+        txt = (seg.text or "").strip()
+        comma_split = bool(txt) and (txt[-1] in endings_clause) and (txt[-1] not in endings_sentence)
+        units = estimate_text_units(txt)
+        dur = float(seg.end) - float(seg.start)
+        print(
+            f"  - {i:04d} {float(seg.start):8.2f} {float(seg.end):8.2f}  dur={dur:6.2f}s  "
+            f"units={units:3d}  comma_split={'y' if comma_split else 'n'}",
+            flush=True,
+        )
 
     (output_dir / "sentence_segments.json").write_text(
         json.dumps([asdict(s) for s in sentence_segments], ensure_ascii=False, indent=2),

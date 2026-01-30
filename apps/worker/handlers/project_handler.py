@@ -56,12 +56,14 @@ async def process_project_task(task: dict[str, Any], redis: Redis, settings: Set
         semantic_chunk_repo=semantic_chunk_repo,
     )
 
+    typ = str(task.get("type", "")).strip()
+    final_error_message: str | None = None
+
     try:
         await project_repo.update_status(
             project_id, ProjectStatus.PROCESSING.value, project.current_stage
         )
 
-        typ = str(task.get("type", "")).strip()
         if typ == "run_all":
             from_stage_raw = task.get("from_stage")
             from_stage = StageName(str(from_stage_raw)) if from_stage_raw else None
@@ -80,6 +82,11 @@ async def process_project_task(task: dict[str, Any], redis: Redis, settings: Set
                     start_index = 0
             for s in stage_order[start_index:]:
                 project, _ = await orchestrator.run_stage(project, s)
+                await project_repo.update_status(
+                    project_id, project.status.value, project.current_stage
+                )
+                if project.status in (ProjectStatus.COMPLETED, ProjectStatus.FAILED):
+                    break
         elif typ == "run_stage" or typ == "retry_stage":
             stage_raw = task.get("stage")
             if not stage_raw:
@@ -97,9 +104,30 @@ async def process_project_task(task: dict[str, Any], redis: Redis, settings: Set
                 )
         else:
             return
-        await project_repo.update_status(project_id, project.status.value, project.current_stage)
 
     except Exception as exc:
+        final_error_message = str(exc)
+        logger.exception("project task failed (project_id=%s, type=%s)", project_id, typ or "?")
+        project.status = ProjectStatus.FAILED
         await project_repo.update_status(
-            project_id, ProjectStatus.FAILED.value, project.current_stage, error_message=str(exc)
+            project_id,
+            ProjectStatus.FAILED.value,
+            project.current_stage,
+            error_message=final_error_message,
         )
+    finally:
+        try:
+            await project_repo.update_status(
+                project_id,
+                project.status.value,
+                project.current_stage,
+                error_message=final_error_message
+                if project.status == ProjectStatus.FAILED
+                else None,
+            )
+        except Exception:
+            logger.exception(
+                "failed to persist final project status (project_id=%s, type=%s)",
+                project_id,
+                typ or "?",
+            )

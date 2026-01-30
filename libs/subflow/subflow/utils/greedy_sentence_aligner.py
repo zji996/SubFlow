@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
+import re
 
 
 @dataclass(frozen=True)
@@ -24,7 +25,8 @@ class SentenceAlignedSegment:
 class GreedySentenceAlignerConfig:
     max_chunk_s: float = 10.0
     fallback_chunk_s: float = 15.0
-    max_segment_s: float = 8.0  # Max segment duration; exceeding triggers clause-level split
+    max_segment_s: float = 8.0  # Hard upper bound for segments without clear punctuation
+    max_segment_chars: int = 50  # Prefer clause split only when text is long enough
     sentence_endings: str = "。？！；?!;."
     clause_endings: str = "，,、：:—–"
     vad_search_range_s: float = 1.0
@@ -35,6 +37,35 @@ class GreedySentenceAlignerConfig:
 
 
 TranscribeWindowFn = Callable[[float, float], Awaitable[str]]
+
+
+_LATIN_WORD_RE = re.compile(r"[A-Za-z0-9]+(?:'[A-Za-z0-9]+)?")
+
+
+def _is_cjk_char(ch: str) -> bool:
+    if not ch:
+        return False
+    code = ord(ch)
+    # CJK Unified Ideographs + Ext A + Compatibility Ideographs
+    return (
+        (0x4E00 <= code <= 0x9FFF)
+        or (0x3400 <= code <= 0x4DBF)
+        or (0xF900 <= code <= 0xFAFF)
+    )
+
+
+def estimate_text_units(text: str) -> int:
+    """Estimate subtitle length units.
+
+    - Chinese (CJK) characters count as 1 unit each.
+    - Latin "words" (A-Za-z0-9 tokens) count as 1 unit each.
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return 0
+    cjk = sum(1 for ch in raw if _is_cjk_char(ch))
+    latin_words = len(_LATIN_WORD_RE.findall(raw))
+    return int(cjk + latin_words)
 
 
 def split_first_sentence(text: str, *, sentence_endings: str) -> tuple[str, str]:
@@ -89,6 +120,56 @@ def split_first_clause(text: str, *, clause_endings: str) -> tuple[str, str]:
     while end < len(raw) and raw[end] in trailing:
         end += 1
 
+    clause = raw[:end].strip()
+    remaining = raw[end:].lstrip()
+    return (clause, remaining)
+
+
+def split_clause_by_max_units(
+    text: str,
+    *,
+    clause_endings: str,
+    max_units: int,
+    max_ratio: float | None = None,
+) -> tuple[str, str]:
+    """Split at a clause boundary, preferring the longest prefix within `max_units`.
+
+    When multiple clause-ending punctuation marks exist, this chooses the *last* boundary
+    whose prefix length is <= `max_units` (so segments don't become too short).
+
+    If `max_ratio` is provided, it is applied as an additional constraint on the selected
+    prefix length (based on raw character ratio), used as a rough time-proxy.
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return ("", "")
+
+    endings = set(clause_endings)
+    trailing = set("\"'”’)]}〉》」』")
+
+    candidates: list[tuple[int, int, int]] = []
+    # (units, end_idx, boundary_idx)
+    for i, ch in enumerate(raw):
+        if ch not in endings:
+            continue
+        end = i + 1
+        while end < len(raw) and raw[end] in trailing:
+            end += 1
+        prefix = raw[:end].strip()
+        units = estimate_text_units(prefix)
+        if units <= 0:
+            continue
+        if max_ratio is not None and len(prefix) > int(round(len(raw) * float(max_ratio))):
+            continue
+        candidates.append((int(units), int(end), int(i)))
+
+    if not candidates:
+        return ("", raw)
+
+    max_units = int(max(1, max_units))
+    within = [c for c in candidates if int(c[0]) <= max_units]
+    chosen = max(within, key=lambda t: (t[0], t[1])) if within else candidates[0]
+    end = int(chosen[1])
     clause = raw[:end].strip()
     remaining = raw[end:].lstrip()
     return (clause, remaining)
@@ -192,10 +273,10 @@ async def greedy_sentence_align_region(
 ) -> list[SentenceAlignedSegment]:
     """Greedy sentence-aligned ASR for a single VAD region.
 
-    Key logic (2026-01 enhancement):
+    Key logic:
     - Try to find sentence-ending punctuation (。？！；?!;.) in max_chunk_s window
     - If not found but clause-ending punctuation (，,、：:—–) exists AND
-      estimated segment duration exceeds max_segment_s, split at clause
+      estimated text length exceeds max_segment_chars, split at clause
     - Otherwise extend to fallback_chunk_s and retry
     - This prevents super-long segments when speakers talk continuously
     """
@@ -229,25 +310,24 @@ async def greedy_sentence_align_region(
             text, sentence_endings=str(cfg.sentence_endings)
         )
 
-        # Step 2: If no sentence ending found, try clause ending
-        clause: str = ""
+        # Step 2: If no sentence ending found, try clause ending (comma etc)
         if not sentence:
-            clause, _remaining = split_first_clause(text, clause_endings=str(cfg.clause_endings))
+            max_units = int(cfg.max_segment_chars)
+            units = estimate_text_units(text)
+            max_ratio = None
+            if chunk_end > cursor and max_seg_s > 0:
+                max_ratio = min(1.0, float(max_seg_s) / float(chunk_end - cursor))
+            if max_units > 0 and units >= max_units:
+                clause, _remaining = split_clause_by_max_units(
+                    text,
+                    clause_endings=str(cfg.clause_endings),
+                    max_units=max_units,
+                    max_ratio=max_ratio,
+                )
+                if clause:
+                    sentence = clause
 
-        # Step 3: Decide whether to use clause or extend window
-        # Key insight: if we have a clause AND the segment would exceed max_segment_s,
-        # prefer splitting at clause rather than extending the window
-        if not sentence and clause:
-            # Estimate clause end time
-            clause_ratio = float(len(clause)) / float(max(1, len(text)))
-            clause_estimated_end = cursor + (chunk_end - cursor) * max(0.0, min(1.0, clause_ratio))
-            segment_duration = clause_estimated_end - cursor
-
-            if segment_duration >= max_seg_s:
-                # Segment would be too long; use clause as split point
-                sentence = clause
-
-        # Step 4: If still no sentence, extend window and retry
+        # Step 3: If still no sentence, extend window and retry
         if not sentence and chunk_end < end:
             extended_end = min(cursor + float(cfg.fallback_chunk_s), end)
             if extended_end > chunk_end:
@@ -257,18 +337,33 @@ async def greedy_sentence_align_region(
                     text, sentence_endings=str(cfg.sentence_endings)
                 )
                 if not sentence:
-                    clause, _remaining = split_first_clause(
-                        text, clause_endings=str(cfg.clause_endings)
-                    )
-                    if clause:
-                        # In extended window, always use clause if available
-                        # (already exceeded max_chunk_s)
-                        sentence = clause
+                    max_units = int(cfg.max_segment_chars)
+                    units = estimate_text_units(text)
+                    max_ratio = None
+                    if chunk_end > cursor and max_seg_s > 0:
+                        max_ratio = min(1.0, float(max_seg_s) / float(chunk_end - cursor))
+                    if max_units > 0 and units >= max_units:
+                        clause, _remaining = split_clause_by_max_units(
+                            text,
+                            clause_endings=str(cfg.clause_endings),
+                            max_units=max_units,
+                            max_ratio=max_ratio,
+                        )
+                        if clause:
+                            sentence = clause
 
         if not sentence:
-            # No punctuation found at all; output entire chunk
-            segments.append(SentenceAlignedSegment(start=cursor, end=chunk_end, text=text))
-            cursor = chunk_end
+            # No punctuation found at all; enforce max_segment_s as a hard upper bound.
+            hard_end = min(end, cursor + float(max_seg_s)) if max_seg_s > 0 else float(chunk_end)
+            if hard_end > cursor and hard_end < float(chunk_end) - 1e-6:
+                hard_text = (await transcribe_window(cursor, hard_end)).strip()
+                segments.append(
+                    SentenceAlignedSegment(start=cursor, end=float(hard_end), text=hard_text)
+                )
+                cursor = float(hard_end)
+            else:
+                segments.append(SentenceAlignedSegment(start=cursor, end=chunk_end, text=text))
+                cursor = chunk_end
             continue
 
         ratio = float(len(sentence)) / float(max(1, len(text)))

@@ -66,14 +66,16 @@ class NemoMarbleNetVADProvider(VADProvider):
         if not model_path.exists():
             raise FileNotFoundError(f"NeMo VAD model not found: {model_path}")
 
-        model = nemo_asr.models.EncDecFrameClassificationModel.restore_from(
-            restore_path=str(model_path),
-            strict=False,
-        )
         if self.device:
             dev = torch.device(self.device)
         else:
             dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        model = nemo_asr.models.EncDecFrameClassificationModel.restore_from(
+            restore_path=str(model_path),
+            strict=False,
+            map_location=dev,
+        )
         model = model.to(dev)
         model.eval()
         self._model = model

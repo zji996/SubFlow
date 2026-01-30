@@ -338,6 +338,14 @@ class SemanticChunkingPass(BaseLLMStage):
         translation_max_tokens = int(
             getattr(self.settings.llm_limits, "translation_max_tokens", 16384) or 16384
         )
+        request_timeout_s = float(
+            getattr(self.settings.llm_limits, "translation_request_timeout_s", 120.0) or 120.0
+        )
+        batch_total_timeout_s = float(
+            getattr(self.settings.llm_limits, "translation_batch_total_timeout_s", 300.0) or 300.0
+        )
+        request_timeout_s = max(1.0, float(request_timeout_s))
+        batch_total_timeout_s = max(1.0, float(batch_total_timeout_s))
 
         translations: list[SegmentTranslation] = []
         chunks: list[SemanticChunk] = []
@@ -451,8 +459,22 @@ class SemanticChunkingPass(BaseLLMStage):
                 max_retries = 3
                 saw_retry = False
                 last_attempt_no = 0
+                batch_started_at = time.monotonic()
+                batch_timed_out = False
 
                 for attempt in range(max_retries + 1):
+                    elapsed_batch = time.monotonic() - batch_started_at
+                    if elapsed_batch >= batch_total_timeout_s:
+                        logger.warning(
+                            "batch translate tool_use total timeout reached; aborting retries (attempt=%d/%d, elapsed=%.1fs, timeout=%.1fs)",
+                            attempt + 1,
+                            max_retries + 1,
+                            elapsed_batch,
+                            batch_total_timeout_s,
+                        )
+                        batch_timed_out = True
+                        break
+
                     missing_items = [
                         (int(i), t) for i, t in batch_items if int(i) not in all_results
                     ]
@@ -497,16 +519,29 @@ class SemanticChunkingPass(BaseLLMStage):
                     try:
                         async with tracker.acquire(service):
                             last_attempt_no = attempt + 1
-                            result = await self.llm.complete_with_tools(
-                                [
-                                    Message(role="system", content=system_prompt_tool_use),
-                                    Message(role="user", content=user_input),
-                                ],
-                                tools=[TRANSLATE_SEGMENT_TOOL],
-                                parallel_tool_calls=True,
-                                temperature=0.2,
-                                max_tokens=translation_max_tokens,
-                            )
+                            try:
+                                result = await asyncio.wait_for(
+                                    self.llm.complete_with_tools(
+                                        [
+                                            Message(role="system", content=system_prompt_tool_use),
+                                            Message(role="user", content=user_input),
+                                        ],
+                                        tools=[TRANSLATE_SEGMENT_TOOL],
+                                        parallel_tool_calls=True,
+                                        temperature=0.2,
+                                        max_tokens=translation_max_tokens,
+                                    ),
+                                    timeout=request_timeout_s,
+                                )
+                            except asyncio.TimeoutError:
+                                logger.warning(
+                                    "batch translate tool_use request timed out (attempt=%d/%d, timeout=%.1fs, expected_ids=%s)",
+                                    attempt + 1,
+                                    max_retries + 1,
+                                    request_timeout_s,
+                                    expected_ids,
+                                )
+                                result = None
                     except NotImplementedError as exc:
                         raise StageExecutionError(
                             self.name,
@@ -518,20 +553,23 @@ class SemanticChunkingPass(BaseLLMStage):
                         attempt + 1,
                         expected_ids,
                         len(user_input),
-                        len(list(getattr(result, "tool_calls", None) or [])),
+                        len(list(getattr(result, "tool_calls", None) or [])) if result is not None else 0,
                     )
 
-                    usage = getattr(result, "usage", None)
-                    prompt = getattr(usage, "prompt_tokens", None)
-                    completion = getattr(usage, "completion_tokens", None)
                     async with tokens_lock:
+                        usage = getattr(result, "usage", None) if result is not None else None
+                        prompt = getattr(usage, "prompt_tokens", None)
+                        completion = getattr(usage, "completion_tokens", None)
                         if isinstance(prompt, int):
                             llm_prompt_tokens += int(prompt)
                         if isinstance(completion, int):
                             llm_completion_tokens += int(completion)
                         llm_calls += 1
 
-                    for call in list(getattr(result, "tool_calls", None) or []):
+                    returned_ids: list[int] = []
+                    ignored_ids: list[object] = []
+                    duplicate_ids: list[int] = []
+                    for call in list(getattr(result, "tool_calls", None) or []) if result else []:
                         if getattr(call, "name", None) != TRANSLATE_SEGMENT_TOOL.name:
                             continue
                         args = getattr(call, "arguments", None)
@@ -545,16 +583,37 @@ class SemanticChunkingPass(BaseLLMStage):
                             if isinstance(seg_id, str) and seg_id.strip().isdigit():
                                 seg_id = int(seg_id.strip())
                             else:
+                                ignored_ids.append(seg_id)
                                 continue
                         if int(seg_id) not in expected_set:
+                            ignored_ids.append(seg_id)
                             continue
                         if int(seg_id) in all_results:
+                            duplicate_ids.append(int(seg_id))
                             continue
                         all_results[int(seg_id)] = str(translated or "").strip()
+                        returned_ids.append(int(seg_id))
+
+                    if logger.isEnabledFor(logging.DEBUG):
+                        logger.debug(
+                            "batch translate tool_use parsed (attempt=%d/%d, expected=%d, returned=%d, ignored=%d, duplicates=%d)",
+                            attempt + 1,
+                            max_retries + 1,
+                            len(expected_ids),
+                            len(returned_ids),
+                            len(ignored_ids),
+                            len(duplicate_ids),
+                        )
 
                     missing = [int(i) for i, _t in batch_items if int(i) not in all_results]
                     will_retry = bool(missing) and attempt < max_retries
-                    logger.debug("missing_ids=%s, will_retry=%s", missing, will_retry)
+                    logger.debug(
+                        "missing_ids=%s, will_retry=%s, expected_ids=%s, returned_ids=%s",
+                        missing,
+                        will_retry,
+                        expected_ids,
+                        returned_ids,
+                    )
                     if will_retry:
                         if attempt >= 1 and len(missing) <= 1:
                             logger.warning(
@@ -571,7 +630,13 @@ class SemanticChunkingPass(BaseLLMStage):
                             missing,
                         )
                         saw_retry = True
-                        await _report_retry(attempt + 1, max_retries, len(missing), "retrying")
+                        await _report_retry(
+                            attempt + 1,
+                            max_retries,
+                            len(missing),
+                            "retrying",
+                            reason="请求超时" if result is None else None,
+                        )
                         continue
                     break
 
@@ -579,7 +644,8 @@ class SemanticChunkingPass(BaseLLMStage):
                 missing_final = [i for i in expected_ids_all if int(i) not in all_results]
                 if missing_final:
                     logger.error(
-                        "batch translate tool_use still missing ids after retries; fallback to source text (missing=%s)",
+                        "batch translate tool_use %s; fallback to source text (missing=%s)",
+                        "timed out" if batch_timed_out else "still missing ids after retries",
                         missing_final,
                     )
                     await _report_retry(
@@ -587,7 +653,11 @@ class SemanticChunkingPass(BaseLLMStage):
                         max_retries,
                         len(missing_final),
                         "failed",
-                        reason=f"缺失 {len(missing_final)} 个翻译（已跳过）",
+                        reason=(
+                            f"超时且缺失 {len(missing_final)} 个翻译（已跳过）"
+                            if batch_timed_out
+                            else f"缺失 {len(missing_final)} 个翻译（已跳过）"
+                        ),
                     )
                     for seg_id in missing_final:
                         all_results[int(seg_id)] = str(source_by_id.get(int(seg_id), "") or "").strip()

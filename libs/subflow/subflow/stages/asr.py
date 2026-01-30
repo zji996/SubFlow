@@ -90,6 +90,7 @@ class ASRStage(Stage):
             max_chunk_s=float(self.settings.greedy_sentence_asr.max_chunk_s),
             fallback_chunk_s=float(self.settings.greedy_sentence_asr.fallback_chunk_s),
             max_segment_s=float(self.settings.greedy_sentence_asr.max_segment_s),
+            max_segment_chars=int(self.settings.greedy_sentence_asr.max_segment_chars),
             vad_search_range_s=float(self.settings.greedy_sentence_asr.vad_search_range_s),
             vad_valley_threshold=float(self.settings.greedy_sentence_asr.vad_valley_threshold),
             sentence_endings=str(self.settings.greedy_sentence_asr.sentence_endings),

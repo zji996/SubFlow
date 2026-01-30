@@ -148,6 +148,9 @@ class _NoopRepo:
     async def delete(self, project_id: str) -> None:  # noqa: ARG002
         return None
 
+    async def get(self, project_id: str):  # noqa: ANN001, ARG002
+        return None
+
     async def save(self, project_id: str, context):  # noqa: ANN001, ARG002
         return None
 
@@ -476,3 +479,116 @@ async def test_orchestrator_runs_llm_asr_correction_stage(tmp_path, monkeypatch)
 
     assert project.current_stage == 4
     assert asr_repo._corrected["p1"][0] == "hello"
+
+
+async def test_orchestrator_marks_completed_after_llm(tmp_path, monkeypatch) -> None:
+    settings = Settings(
+        data_dir=str(tmp_path / "data"),
+        log_dir=str(tmp_path / "logs"),
+        models_dir=str(tmp_path / "models"),
+    )
+    store = LocalArtifactStore(str(tmp_path / "store"))
+
+    project = Project(id="p1", name="n", media_url=str(tmp_path / "x.mp4"))
+    project_repo = _InMemoryProjectRepo()
+    project_repo.add(project)
+    stage_run_repo = _InMemoryStageRunRepo()
+    vad_repo = _InMemoryVADRepo()
+    asr_repo = _InMemoryASRRepo()
+    noop = _NoopRepo()
+
+    monkeypatch.setitem(
+        RUNNERS,
+        StageName.AUDIO_PREPROCESS,
+        _Runner(stage=StageName.AUDIO_PREPROCESS, ctx_update={"audio_path": "a.wav"}, artifacts={}),
+    )
+    monkeypatch.setitem(
+        RUNNERS,
+        StageName.VAD,
+        _Runner(stage=StageName.VAD, ctx_update={"vad_regions": []}, artifacts={}),
+    )
+    monkeypatch.setitem(
+        RUNNERS,
+        StageName.ASR,
+        _Runner(stage=StageName.ASR, ctx_update={"asr_segments": []}, artifacts={}),
+    )
+    monkeypatch.setitem(
+        RUNNERS,
+        StageName.LLM_ASR_CORRECTION,
+        _Runner(
+            stage=StageName.LLM_ASR_CORRECTION,
+            ctx_update={"asr_corrected_segments": {}},
+            artifacts={},
+        ),
+    )
+    monkeypatch.setitem(
+        RUNNERS,
+        StageName.LLM,
+        _Runner(stage=StageName.LLM, ctx_update={"semantic_chunks": []}, artifacts={}),
+    )
+
+    orchestrator = PipelineOrchestrator(
+        settings,
+        store=store,
+        project_repo=project_repo,
+        stage_run_repo=stage_run_repo,
+        vad_repo=vad_repo,
+        asr_repo=asr_repo,
+        asr_merged_chunk_repo=noop,
+        global_context_repo=noop,
+        semantic_chunk_repo=noop,
+    )
+
+    project, _ctx = await orchestrator.run_stage(project, StageName.LLM)
+
+    assert project.current_stage == 5
+    assert project.status == ProjectStatus.COMPLETED
+
+
+async def test_orchestrator_reconciles_stage_runs_before_running(tmp_path) -> None:
+    settings = Settings(
+        data_dir=str(tmp_path / "data"),
+        log_dir=str(tmp_path / "logs"),
+        models_dir=str(tmp_path / "models"),
+    )
+    store = LocalArtifactStore(str(tmp_path / "store"))
+
+    project = Project(
+        id="p1",
+        name="n",
+        media_url=str(tmp_path / "x.mp4"),
+        status=ProjectStatus.PROCESSING,
+        current_stage=4,
+    )
+    project_repo = _InMemoryProjectRepo()
+    project_repo.add(project)
+    stage_run_repo = _InMemoryStageRunRepo()
+    vad_repo = _InMemoryVADRepo()
+    asr_repo = _InMemoryASRRepo()
+    noop = _NoopRepo()
+
+    for s in [
+        StageName.AUDIO_PREPROCESS,
+        StageName.VAD,
+        StageName.ASR,
+        StageName.LLM_ASR_CORRECTION,
+        StageName.LLM,
+    ]:
+        await stage_run_repo.mark_completed(project.id, s.value, metadata={"output_artifacts": {}})
+
+    orchestrator = PipelineOrchestrator(
+        settings,
+        store=store,
+        project_repo=project_repo,
+        stage_run_repo=stage_run_repo,
+        vad_repo=vad_repo,
+        asr_repo=asr_repo,
+        asr_merged_chunk_repo=noop,
+        global_context_repo=noop,
+        semantic_chunk_repo=noop,
+    )
+
+    project, _ctx = await orchestrator.run_stage(project, StageName.LLM)
+
+    assert project.current_stage == 5
+    assert project.status == ProjectStatus.COMPLETED

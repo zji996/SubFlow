@@ -1,4 +1,9 @@
-"""ASS subtitle formatter (dual-style)."""
+"""ASS subtitle formatter (dual-style or inline dual-line).
+
+Supports two modes:
+1. Dual-style mode (default): Primary and Secondary as separate dialogue lines with different styles
+2. Inline mode: Single dialogue line with primary text + \\N{\\fsXX} + secondary text
+"""
 
 from __future__ import annotations
 
@@ -54,78 +59,77 @@ class ASSFormatter(SubtitleFormatter):
             position = "bottom"
         alignment = 8 if position == "top" else 2
         base_margin = _safe_int(style.margin, default=20, min_value=0, max_value=200)
-        primary_size = _safe_int(style.primary_size, default=36, min_value=8, max_value=200)
-        secondary_size = _safe_int(style.secondary_size, default=24, min_value=8, max_value=200)
-        spacing = max(primary_size, secondary_size) + 10
-
-        if position == "bottom":
-            above_margin = base_margin + spacing
-            below_margin = base_margin
-        else:
-            above_margin = base_margin
-            below_margin = base_margin + spacing
-
-        if config.primary_position == "top":
-            primary_margin = above_margin
-            secondary_margin = below_margin
-        else:
-            primary_margin = below_margin
-            secondary_margin = above_margin
+        primary_size = _safe_int(style.primary_size, default=70, min_value=8, max_value=200)
+        secondary_size = _safe_int(style.secondary_size, default=45, min_value=8, max_value=200)
 
         primary_color = _ass_color(style.primary_color, default="&H00FFFFFF")
         secondary_color = _ass_color(style.secondary_color, default="&H00CCCCCC")
         primary_outline_color = _ass_color(style.primary_outline_color, default="&H00000000")
         secondary_outline_color = _ass_color(style.secondary_outline_color, default="&H00000000")
-        primary_outline_width = _safe_int(
+        outline_width = _safe_int(
             style.primary_outline_width, default=2, min_value=0, max_value=10
         )
-        secondary_outline_width = _safe_int(
-            style.secondary_outline_width, default=1, min_value=0, max_value=10
-        )
+        shadow_depth = _safe_int(getattr(style, "shadow_depth", 1), default=1, min_value=0, max_value=10)
 
-        header = """[Script Info]
+        primary_font = (style.primary_font or "Arial").replace(",", " ").strip() or "Arial"
+        secondary_font = (style.secondary_font or "Arial").replace(",", " ").strip() or "Arial"
+
+        # Check if inline mode is enabled (single line with \N{\fsXX} separator)
+        inline_mode = getattr(style, "inline_mode", True)  # Default to inline mode
+
+        # ASS V4+ Style format (complete spec):
+        # Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour,
+        #         Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle,
+        #         BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+        header = f"""[Script Info]
 Title: SubFlow Generated Subtitles
 ScriptType: v4.00+
 PlayResX: 1920
 PlayResY: 1080
+WrapStyle: 0
 
 [V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, BackColour, OutlineColour, Bold, Italic, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Primary,{primary_font},{primary_size},{primary_color},&H00000000,{primary_outline_color},0,0,1,{primary_outline_width},1,{alignment},10,10,{primary_margin},1
-Style: Secondary,{secondary_font},{secondary_size},{secondary_color},&H00000000,{secondary_outline_color},0,0,1,{secondary_outline_width},1,{alignment},10,10,{secondary_margin},1
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,{primary_font},{primary_size},{primary_color},{secondary_color},{primary_outline_color},&H80000000,0,0,0,0,100,100,0,0,1,{outline_width},{shadow_depth},{alignment},10,10,{base_margin},1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-""".format(
-            primary_font=(style.primary_font or "Arial").replace(",", " ").strip() or "Arial",
-            primary_size=primary_size,
-            primary_color=primary_color,
-            primary_outline_color=primary_outline_color,
-            primary_outline_width=primary_outline_width,
-            alignment=alignment,
-            primary_margin=primary_margin,
-            secondary_font=(style.secondary_font or "Arial").replace(",", " ").strip() or "Arial",
-            secondary_size=secondary_size,
-            secondary_color=secondary_color,
-            secondary_outline_color=secondary_outline_color,
-            secondary_outline_width=secondary_outline_width,
-            secondary_margin=secondary_margin,
-        )
+"""
+
         events: list[str] = []
 
         for entry in entries:
-            rendered = [
-                (kind, text.replace("\n", "\\N"))
-                for kind, text in selected_lines(entry.primary_text, entry.secondary_text, config)
-            ]
-            if not rendered:
-                continue
-
             start = _seconds_to_ass_time(entry.start)
             end = _seconds_to_ass_time(entry.end)
 
-            for kind, text in rendered:
-                style_name = "Primary" if kind == "primary" else "Secondary"
-                events.append(f"Dialogue: 0,{start},{end},{style_name},,0,0,0,,{text}")
+            # Process primary text: replace Chinese comma with space for better readability
+            primary_text = (entry.primary_text or "").strip()
+            primary_text = primary_text.replace("，", " ").replace("\n", "\\N")
+
+            secondary_text = (entry.secondary_text or "").strip().replace("\n", "\\N")
+
+            if inline_mode and config.content.value == "both":
+                # Inline mode: combine primary + secondary with font size override
+                # Format: 中文翻译 \N{\fs45}English source
+                if primary_text and secondary_text:
+                    # Primary text first (uses style's default font size)
+                    # Secondary text with explicit font size override
+                    combined = f"{primary_text} \\N{{\\fs{secondary_size}}}{secondary_text}"
+                    events.append(f"Dialogue: 0,{start},{end},Default,,0,0,0,,{combined}")
+                elif primary_text:
+                    events.append(f"Dialogue: 0,{start},{end},Default,,0,0,0,,{primary_text}")
+                elif secondary_text:
+                    events.append(f"Dialogue: 0,{start},{end},Default,,0,0,0,,{secondary_text}")
+            else:
+                # Legacy dual-style mode (separate lines for primary/secondary)
+                rendered = [
+                    (kind, text.replace("\n", "\\N"))
+                    for kind, text in selected_lines(entry.primary_text, entry.secondary_text, config)
+                ]
+                if not rendered:
+                    continue
+
+                for kind, text in rendered:
+                    events.append(f"Dialogue: 0,{start},{end},Default,,0,0,0,,{text}")
 
         return (header + "\n".join(events)).rstrip() + "\n"

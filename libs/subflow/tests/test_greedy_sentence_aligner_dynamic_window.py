@@ -8,7 +8,7 @@ from subflow.utils.greedy_sentence_aligner import (
 
 @pytest.mark.asyncio
 async def test_greedy_sentence_align_region_prefers_clause_punctuation_in_primary_window() -> None:
-    """When segment duration exceeds max_segment_s and no sentence-ending punctuation,
+    """When text units exceed max_segment_chars and no sentence-ending punctuation,
     prefer splitting at clause-ending punctuation (comma) rather than extending window."""
     calls: list[tuple[float, float]] = []
 
@@ -16,10 +16,13 @@ async def test_greedy_sentence_align_region_prefers_clause_punctuation_in_primar
         calls.append((float(start), float(end)))
         return "Hello, world"
 
-    # Set max_segment_s=4.0 so that estimated clause end (~5s) exceeds it,
-    # triggering forced split at comma without extending to fallback window.
+    # "Hello, world" is 2 units ("Hello" + "world"); max_segment_chars=2 forces comma split.
     cfg = GreedySentenceAlignerConfig(
-        max_chunk_s=10.0, fallback_chunk_s=15.0, max_segment_s=4.0, max_loops_per_region=1
+        max_chunk_s=10.0,
+        fallback_chunk_s=15.0,
+        max_segment_s=8.0,
+        max_segment_chars=2,
+        max_loops_per_region=1,
     )
     segs = await greedy_sentence_align_region(
         _transcribe_window,
@@ -38,8 +41,7 @@ async def test_greedy_sentence_align_region_prefers_clause_punctuation_in_primar
 
 @pytest.mark.asyncio
 async def test_greedy_sentence_skips_clause_when_segment_shorter_than_max() -> None:
-    """When segment duration is below max_segment_s, skip clause punctuation and
-    extend window to search for sentence-ending punctuation."""
+    """When text units are below max_segment_chars, skip comma split and extend window."""
     calls: list[tuple[float, float]] = []
 
     async def _transcribe_window(start: float, end: float) -> str:
@@ -49,10 +51,14 @@ async def test_greedy_sentence_skips_clause_when_segment_shorter_than_max() -> N
         # Extended window has sentence-ending punctuation
         return "Hello, world. And more text continues here"
 
-    # With max_segment_s=10.0 (default), "Hello," at ~5s is below threshold,
+    # With max_segment_chars large, "Hello, world" won't trigger comma split,
     # so it will extend to fallback window and find the sentence-ending period.
     cfg = GreedySentenceAlignerConfig(
-        max_chunk_s=10.0, fallback_chunk_s=15.0, max_segment_s=10.0, max_loops_per_region=1
+        max_chunk_s=10.0,
+        fallback_chunk_s=15.0,
+        max_segment_s=8.0,
+        max_segment_chars=50,
+        max_loops_per_region=1,
     )
     segs = await greedy_sentence_align_region(
         _transcribe_window,
@@ -82,7 +88,11 @@ async def test_greedy_sentence_align_region_falls_back_to_clause_punctuation_in_
         return "Hello, world"
 
     cfg = GreedySentenceAlignerConfig(
-        max_chunk_s=10.0, fallback_chunk_s=15.0, max_loops_per_region=1
+        max_chunk_s=10.0,
+        fallback_chunk_s=15.0,
+        max_segment_s=8.0,
+        max_segment_chars=2,
+        max_loops_per_region=1,
     )
     segs = await greedy_sentence_align_region(
         _transcribe_window,
@@ -114,6 +124,35 @@ async def test_greedy_sentence_align_region_falls_back_to_clause_punctuation_in_
     assert len(segs) == 1
     assert segs[0].text == "Hello,"
     assert segs[0].end == 7.0
+
+
+@pytest.mark.asyncio
+async def test_greedy_sentence_clause_split_prefers_last_comma_within_char_limit() -> None:
+    calls: list[tuple[float, float]] = []
+
+    async def _transcribe_window(start: float, end: float) -> str:
+        calls.append((float(start), float(end)))
+        return "one two, three four, five six seven"
+
+    cfg = GreedySentenceAlignerConfig(
+        max_chunk_s=10.0,
+        fallback_chunk_s=15.0,
+        max_segment_s=100.0,
+        max_segment_chars=4,  # prefer "one two, three four," over "one two,"
+        max_loops_per_region=1,
+    )
+    segs = await greedy_sentence_align_region(
+        _transcribe_window,
+        frame_probs=[],
+        frame_hop_s=0.02,
+        region_start=0.0,
+        region_end=10.0,
+        config=cfg,
+    )
+
+    assert calls == [(0.0, 10.0)]
+    assert len(segs) == 1
+    assert segs[0].text == "one two, three four,"
 
 
 @pytest.mark.asyncio
@@ -151,7 +190,13 @@ async def test_greedy_sentence_align_region_forces_split_at_fallback_end() -> No
         calls.append((float(start), float(end)))
         return "still no punctuation even with a longer window"
 
-    cfg = GreedySentenceAlignerConfig(max_chunk_s=10.0, fallback_chunk_s=15.0)
+    cfg = GreedySentenceAlignerConfig(
+        max_chunk_s=10.0,
+        fallback_chunk_s=15.0,
+        max_segment_s=8.0,
+        max_segment_chars=50,
+        max_loops_per_region=1,
+    )
     segs = await greedy_sentence_align_region(
         _transcribe_window,
         frame_probs=[],
@@ -161,10 +206,10 @@ async def test_greedy_sentence_align_region_forces_split_at_fallback_end() -> No
         config=cfg,
     )
 
-    assert calls == [(0.0, 10.0), (0.0, 15.0)]
+    assert calls == [(0.0, 10.0), (0.0, 15.0), (0.0, 8.0)]
     assert len(segs) == 1
     assert segs[0].start == 0.0
-    assert segs[0].end == 15.0
+    assert segs[0].end == 8.0
     assert segs[0].text == "still no punctuation even with a longer window"
 
 
@@ -176,7 +221,12 @@ async def test_greedy_sentence_align_region_does_not_retry_when_at_region_end() 
         calls.append((float(start), float(end)))
         return "no punctuation but region is shorter than max_chunk_s"
 
-    cfg = GreedySentenceAlignerConfig(max_chunk_s=10.0, fallback_chunk_s=15.0)
+    cfg = GreedySentenceAlignerConfig(
+        max_chunk_s=10.0,
+        fallback_chunk_s=15.0,
+        max_segment_s=100.0,
+        max_segment_chars=50,
+    )
     segs = await greedy_sentence_align_region(
         _transcribe_window,
         frame_probs=[],

@@ -69,6 +69,16 @@ class LLMLimitsConfig(BaseSettings):
         ge=256,
         description="Max tokens for translation batch output.",
     )
+    translation_request_timeout_s: float = Field(
+        default=120.0,
+        gt=0,
+        description="Timeout (seconds) for a single translation tool-use request.",
+    )
+    translation_batch_total_timeout_s: float = Field(
+        default=300.0,
+        gt=0,
+        description="Total timeout (seconds) for one batch translation (all retries).",
+    )
 
 
 class LLMFastConfig(LLMProfileConfig):
@@ -160,9 +170,9 @@ class VADConfig(BaseSettings):
     )
     nemo_device: str | None = None
 
-    # Base VAD parameters (defaults tuned for shorter ASR-friendly segments)
-    min_silence_duration_ms: int = 60
-    min_speech_duration_ms: int = 100
+    # Base VAD parameters (tuned for coarse regions; Stage 3 does sentence-aligned splitting)
+    min_silence_duration_ms: int = 500
+    min_speech_duration_ms: int = 250
     threshold: float = 0.60
     # Split long regions at low-probability valleys (VAD-aware splitting).
     # NOTE: disabled by default; Stage 3 now handles sentence-aligned splitting.
@@ -199,7 +209,12 @@ class GreedySentenceASRConfig(BaseSettings):
     max_segment_s: float = Field(
         default=8.0,
         gt=0,
-        description="Max segment duration; exceeding triggers clause-level split",
+        description="Hard upper bound for segments without clear punctuation",
+    )
+    max_segment_chars: int = Field(
+        default=50,
+        ge=1,
+        description="Clause (comma) split threshold (CJK chars + Latin words)",
     )
     vad_search_range_s: float = Field(default=1.0, gt=0)
     vad_valley_threshold: float = Field(default=0.3, ge=0, le=1)
